@@ -37,3 +37,6 @@ build/
 # Temporary files
 tmp/
 temp/
+
+# Wrangler local state (D1 local DB, etc.)
+.wrangler/

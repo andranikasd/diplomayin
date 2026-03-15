@@ -2,6 +2,19 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const winston = require('winston');
 
+// Lazy-load puppeteer only when needed (heavy dep)
+let puppeteerBrowser = null
+async function getPuppeteerBrowser() {
+    if (!puppeteerBrowser) {
+        const puppeteer = require('puppeteer')
+        puppeteerBrowser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        })
+    }
+    return puppeteerBrowser
+}
+
 // Logger setup
 const logger = winston.createLogger({
     level: process.env.LOG_LEVEL || 'info',
@@ -74,8 +87,15 @@ class BaseScraper {
             await this.delay(this.requestDelay);
             return response.data;
         } catch (error) {
-            this.logger.error(`Error fetching ${url}: ${error.message}`);
+            const status = error.response?.status;
 
+            // 403/429 — site is blocking axios; fall back to headless Puppeteer
+            if ((status === 403 || status === 429) && retries === 0) {
+                this.logger.info(`🤖 Axios blocked (${status}), switching to Puppeteer for ${url}`);
+                return this.fetchWithPuppeteer(url);
+            }
+
+            this.logger.error(`Error fetching ${url}: ${error.message}`);
             if (retries < this.maxRetries) {
                 const backoff = this.requestDelay * Math.pow(2, retries);
                 this.logger.info(`Retrying... (${retries + 1}/${this.maxRetries}) in ${backoff}ms`);
@@ -84,6 +104,24 @@ class BaseScraper {
             }
 
             throw error;
+        }
+    }
+
+    async fetchWithPuppeteer(url) {
+        this.logger.info(`Puppeteer fetching: ${url}`);
+        const browser = await getPuppeteerBrowser();
+        const page = await browser.newPage();
+        try {
+            await page.setUserAgent(this._nextUserAgent());
+            await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            // Wait a moment for any JS rendering
+            await this.delay(1500);
+            const html = await page.content();
+            await this.delay(this.requestDelay);
+            return html;
+        } finally {
+            await page.close();
         }
     }
 
@@ -122,17 +160,15 @@ class BaseScraper {
 
     async updateJobStatus(jobId, status, itemsScraped = 0, errorMessage = null) {
         try {
-            const query = `
-        UPDATE scraper_jobs 
-        SET status = $1, 
-            items_scraped = $2, 
-            error_message = $3,
-            ${status === 'running' ? 'started_at = CURRENT_TIMESTAMP,' : ''}
-            ${status === 'completed' || status === 'failed' ? 'completed_at = CURRENT_TIMESTAMP,' : ''}
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-      `;
+            let extra = '';
+            if (status === 'running') extra = ', started_at = CURRENT_TIMESTAMP';
+            else if (status === 'completed' || status === 'failed') extra = ', completed_at = CURRENT_TIMESTAMP';
 
+            const query = `
+                UPDATE scraper_jobs
+                SET status = $1, items_scraped = $2, error_message = $3${extra}
+                WHERE id = $4
+            `;
             await this.db.query(query, [status, itemsScraped, errorMessage, jobId]);
         } catch (error) {
             this.logger.error(`Error updating job status:`, error.message);
@@ -156,7 +192,7 @@ class BaseScraper {
     }
 
     // Abstract method to be implemented by child classes
-    async scrape(url) {
+    async scrape(_url) {
         throw new Error('scrape() must be implemented by child class');
     }
 }

@@ -1,0 +1,14 @@
+name = "armdata"
+compatibility_date = "2024-12-18"
+pages_build_output_dir = "public"
+
+[vars]
+ENABLE_AI_SQL = "false"
+
+# Set these as secrets via: wrangler pages secret put JWT_SECRET
+# wrangler pages secret put OPENAI_API_KEY
+
+[[d1_databases]]
+binding = "DB"
+database_name = "armdata-db"
+database_id = "e514e4aa-5034-4640-b6c2-56a2398a0042"

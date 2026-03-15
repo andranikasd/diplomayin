@@ -211,9 +211,10 @@ class TabManager {
     addMessage(role, content) {
         const el = document.createElement('div');
         el.className = `message ${role}`;
+        const label = role === 'user' ? 'You' : 'OSINT Assistant';
         el.innerHTML = `
             <div class="message-content">
-                <div class="message-role">${role === 'user' ? 'You' : 'OSINT Assistant'}</div>
+                <div class="message-role"><span class="message-role-dot"></span>${label}</div>
                 <div class="message-text">${this.escapeHtml(content)}</div>
             </div>`;
         this.messages.appendChild(el);
@@ -225,7 +226,7 @@ class TabManager {
         const el = document.createElement('div');
         el.className = 'message assistant';
 
-        let inner = `<div class="message-role">OSINT Assistant</div>
+        let inner = `<div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
                      <div class="message-text">${this.escapeHtml(data.response)}</div>`;
 
         if (data.chart && data.data && data.data.length > 0) {
@@ -325,7 +326,7 @@ class TabManager {
         el.className = 'message assistant';
         el.innerHTML = `
             <div class="message-content">
-                <div class="message-role">OSINT Assistant</div>
+                <div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
                 <div class="typing">
                     <div class="typing-dot"></div>
                     <div class="typing-dot"></div>
