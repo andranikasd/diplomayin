@@ -210,7 +210,7 @@ async function scrapeArmstatRSS(DB) {
 
                 try {
                     await DB.prepare(
-                        'INSERT INTO statistics (category, indicator, value, unit, period, source, source_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                        'INSERT OR IGNORE INTO statistics (category, indicator, value, unit, period, source, source_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
                     ).bind('economy', indicator, value, unit, period, SOURCE, URL).run()
                     count++
                 } catch {}
