@@ -1,0 +1,14 @@
+name = "armdata-scraper"
+main = "src/index.js"
+compatibility_date = "2024-12-18"
+
+[vars]
+REQUEST_DELAY_MS = "1500"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "armdata-db"
+database_id = "e514e4aa-5034-4640-b6c2-56a2398a0042"
+
+[triggers]
+crons = ["0 */6 * * *"]   # Every 6 hours
