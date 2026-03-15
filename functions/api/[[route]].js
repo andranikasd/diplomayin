@@ -608,12 +608,19 @@ app.get('/data/statistics', (c) => requireAuth(c, async () => {
 app.get('/data/graph', (c) => requireAuth(c, async () => {
     const DB = c.env.DB
     const { results: companies } = await DB.prepare(
-        'SELECT id, name, industry, city, employee_count FROM companies ORDER BY employee_count DESC LIMIT 80'
+        'SELECT id, name, industry, city, employee_count, revenue_estimate, website, founded_date FROM companies ORDER BY employee_count DESC LIMIT 80'
     ).all()
 
     const nodes = companies.map(co => ({
-        id: co.id, name: co.name, group: co.industry || 'Other',
-        city: co.city, size: Math.max(8, Math.min(28, Math.sqrt(co.employee_count || 100)))
+        id: co.id,
+        name: co.name,
+        group: co.industry || 'Other',
+        city: co.city || 'Yerevan',
+        size: Math.max(8, Math.min(28, Math.sqrt(co.employee_count || 100))),
+        employee_count: co.employee_count,
+        revenue_estimate: co.revenue_estimate,
+        website: co.website,
+        founded_date: co.founded_date,
     }))
 
     // Build edges: same industry (weight 2) or same city (weight 1)
@@ -945,6 +952,52 @@ app.get('/auth/google/callback', async (c) => {
         return Response.redirect(`${origin}/login?error=${encodeURIComponent('Authentication failed.')}`, 302)
     }
 })
+
+// GET  /admin/users          →  list all users (admin only)
+app.get('/admin/users', (c) => requireAdmin(c, async () => {
+    const { results } = await c.env.DB.prepare(
+        'SELECT id, email, full_name, role, is_active, last_login_at, created_at FROM users ORDER BY created_at DESC'
+    ).all()
+    return c.json({ success: true, users: results })
+}))
+
+// POST /admin/users          →  create a user with any role (admin only)
+app.post('/admin/users', (c) => requireAdmin(c, async () => {
+    const actor = c.get('user')
+    const { email, password, full_name, role = 'user' } = await c.req.json()
+    if (!email || !password || password.length < 8) return c.json({ success: false, error: 'email and password (min 8 chars) required' }, 400)
+    if (!['user', 'admin'].includes(role)) return c.json({ success: false, error: 'role must be user or admin' }, 400)
+    try {
+        const hash = await hashPassword(password)
+        const user = await c.env.DB.prepare(
+            'INSERT INTO users (email, full_name, password_hash, role) VALUES (?,?,?,?) RETURNING id, email, full_name, role'
+        ).bind(email.toLowerCase(), full_name || email, hash, role).first()
+        await audit(c.env.DB, { userId: actor.id, action: 'admin_create_user', ip: getIp(c), metadata: { targetEmail: email, role }, severity: 'medium' })
+        return c.json({ success: true, user }, 201)
+    } catch (e) {
+        if (e.message?.includes('UNIQUE')) return c.json({ success: false, error: 'Email already exists' }, 409)
+        throw e
+    }
+}))
+
+// PATCH /admin/users/:id     →  update role or active status (admin only)
+app.patch('/admin/users/:id', (c) => requireAdmin(c, async () => {
+    const actor = c.get('user')
+    const { id } = c.req.param()
+    const { role, is_active } = await c.req.json()
+    if (Number(id) === actor.id) return c.json({ success: false, error: 'Cannot modify your own account' }, 400)
+    const fields = [], binds = []
+    if (role !== undefined) {
+        if (!['user', 'admin'].includes(role)) return c.json({ success: false, error: 'role must be user or admin' }, 400)
+        fields.push('role = ?'); binds.push(role)
+    }
+    if (is_active !== undefined) { fields.push('is_active = ?'); binds.push(is_active ? 1 : 0) }
+    if (!fields.length) return c.json({ success: false, error: 'Nothing to update' }, 400)
+    binds.push(id)
+    await c.env.DB.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...binds).run()
+    await audit(c.env.DB, { userId: actor.id, action: 'admin_update_user', ip: getIp(c), metadata: { targetId: id, role, is_active }, severity: 'medium' })
+    return c.json({ success: true })
+}))
 
 // POST /auth/setup  →  first-run admin setup (only works with 0 users)
 app.post('/auth/setup', async (c) => {

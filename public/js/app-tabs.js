@@ -449,7 +449,10 @@ class TabManager {
         } catch { /**/ }
 
         document.getElementById('graph-reset-btn')?.addEventListener('click', () => this._graph?.resetLayout())
+        document.getElementById('graph-zoom-in')?.addEventListener('click',  () => this._graph?.zoomBy(1.3))
+        document.getElementById('graph-zoom-out')?.addEventListener('click', () => this._graph?.zoomBy(0.77))
         document.getElementById('graph-filter')?.addEventListener('change', e => this._graph?.applyFilter(e.target.value))
+        document.getElementById('graph-search')?.addEventListener('input', e => this._graph?.search(e.target.value))
         this._graphLoaded = true
     }
 

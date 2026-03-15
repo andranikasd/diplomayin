@@ -211,13 +211,24 @@
             <span class="graph-subtitle" id="graph-info">Loading…</span>
           </div>
           <div class="graph-toolbar-right">
+            <div class="graph-search-wrap">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input id="graph-search" class="graph-search" placeholder="Search company…" autocomplete="off">
+            </div>
             <select id="graph-filter" class="graph-select">
               <option value="">All industries</option>
             </select>
-            <button id="graph-reset-btn" class="btn-secondary" style="font-size:12px;padding:5px 10px">Reset Layout</button>
+            <div class="graph-zoom-btns">
+              <button id="graph-zoom-in"  class="btn-secondary" title="Zoom in">+</button>
+              <button id="graph-zoom-out" class="btn-secondary" title="Zoom out">−</button>
+              <button id="graph-reset-btn" class="btn-secondary" title="Reset layout">↺</button>
+            </div>
           </div>
         </div>
-        <svg id="network-svg" class="network-svg"></svg>
+        <div class="graph-body">
+          <svg id="network-svg" class="network-svg"></svg>
+          <div id="graph-detail" class="graph-detail" style="display:none"></div>
+        </div>
         <div id="graph-tooltip" class="graph-tooltip" style="display:none"></div>
         <div class="graph-legend" id="graph-legend"></div>
       </div>
