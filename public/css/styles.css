@@ -180,6 +180,8 @@ body {
     background: var(--accent-muted);
     flex-shrink: 0;
 }
+.history-item-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item-date { font-size: 10.5px; color: var(--text-3); flex-shrink: 0; }
 
 /* Footer */
 .sidebar-footer {

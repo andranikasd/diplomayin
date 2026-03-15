@@ -303,7 +303,15 @@ app.get('/chat/history/:sessionId', (c) => requireAuth(c, async () => {
 
 app.get('/chat/sessions', (c) => requireAuth(c, async () => {
     const { results } = await c.env.DB.prepare(
-        'SELECT session_id, COUNT(*) as message_count, MIN(created_at) as first_message, MAX(created_at) as last_message FROM chat_history WHERE user_id = ? GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT 50'
+        `SELECT session_id,
+            COUNT(*) as message_count,
+            MIN(created_at) as first_message,
+            MAX(created_at) as last_message,
+            (SELECT user_message FROM chat_history h2
+             WHERE h2.session_id = chat_history.session_id
+             ORDER BY created_at ASC LIMIT 1) as title
+         FROM chat_history WHERE user_id = ?
+         GROUP BY session_id ORDER BY MAX(created_at) DESC LIMIT 50`
     ).bind(c.get('user').id).all()
     return c.json({ success: true, sessions: results })
 }))

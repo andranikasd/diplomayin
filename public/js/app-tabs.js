@@ -23,6 +23,7 @@ class TabManager {
         this.setupSidebar();
         this.setupLogout();
         this.switchTab(this.currentTab);
+        this.loadSessions();
     }
 
     generateSessionId() {
@@ -88,6 +89,61 @@ class TabManager {
             if (nameEl) nameEl.textContent = displayName;
             if (emailEl) emailEl.textContent = user.email;
         }
+    }
+
+    // ========================================
+    // CHAT SESSIONS (sidebar history)
+    // ========================================
+    async loadSessions() {
+        const historyEl = document.getElementById('chat-history');
+        if (!historyEl) return;
+        try {
+            const res = await this.authedFetch('/api/chat/sessions');
+            const data = await res.json();
+            if (!data.success || !data.sessions?.length) {
+                historyEl.innerHTML = '<p class="empty-history">No previous chats</p>';
+                return;
+            }
+            historyEl.innerHTML = data.sessions.map(s => {
+                const title = this.escapeHtml((s.title || 'Untitled chat').slice(0, 48));
+                const date = s.last_message ? new Date(s.last_message).toLocaleDateString() : '';
+                return `<div class="history-item" data-session="${this.escapeHtml(s.session_id)}" title="${title}">
+                    <span class="history-item-text">${title}</span>
+                    <span class="history-item-date">${date}</span>
+                </div>`;
+            }).join('');
+            historyEl.querySelectorAll('.history-item').forEach(el => {
+                el.addEventListener('click', () => this.openSession(el.dataset.session));
+            });
+        } catch { /* non-fatal */ }
+    }
+
+    async openSession(sessionId) {
+        this.sessionId = sessionId;
+        this.messages.innerHTML = '';
+        if (this.welcome) this.welcome.style.display = 'none';
+        try {
+            const res = await this.authedFetch(`/api/chat/history/${sessionId}`);
+            const data = await res.json();
+            if (data.success && data.history?.length) {
+                data.history.forEach(h => {
+                    this.addMessage('user', h.user_message);
+                    if (h.assistant_response) {
+                        // Reconstruct assistant message from stored data
+                        const el = document.createElement('div');
+                        el.className = 'message assistant';
+                        el.innerHTML = `<div class="message-content">
+                            <div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
+                            <div class="message-text">${this.escapeHtml(h.assistant_response)}</div>
+                        </div>`;
+                        this.messages.appendChild(el);
+                    }
+                });
+                this.scrollToBottom();
+            }
+        } catch { /* non-fatal */ }
+        // Switch to chat tab
+        this.switchTab('chat');
     }
 
     setupLogout() {
@@ -193,6 +249,7 @@ class TabManager {
 
             if (data.success) {
                 this.addAssistantMessage(data);
+                this.loadSessions();
             } else {
                 this.addMessage('assistant', data.response || data.error || 'An error occurred.');
             }
