@@ -1,5 +1,20 @@
 -- Armenian OSINT Marketing Intelligence Database Schema
 
+-- Users (Authentication)
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'user', -- user, admin
+    is_active BOOLEAN DEFAULT true,
+    last_login_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+
 -- Companies and Organizations
 CREATE TABLE IF NOT EXISTS companies (
     id SERIAL PRIMARY KEY,

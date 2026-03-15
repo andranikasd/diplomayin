@@ -19,39 +19,67 @@ const logger = winston.createLogger({
     ]
 });
 
+// Rotate through realistic browser User-Agent strings
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+];
+
 class BaseScraper {
     constructor(name, db) {
         this.name = name;
         this.db = db;
-        this.userAgent = process.env.USER_AGENT || 'Mozilla/5.0';
         this.requestDelay = parseInt(process.env.REQUEST_DELAY_MS) || 2000;
         this.maxRetries = parseInt(process.env.MAX_RETRIES) || 3;
         this.logger = logger;
+        this._uaIndex = 0;
+    }
+
+    _nextUserAgent() {
+        const ua = USER_AGENTS[this._uaIndex % USER_AGENTS.length];
+        this._uaIndex++;
+        return ua;
     }
 
     async fetch(url, retries = 0) {
         try {
             this.logger.info(`Fetching: ${url}`);
 
+            const ua = this._nextUserAgent();
+            const origin = new URL(url).origin;
+
             const response = await axios.get(url, {
                 headers: {
-                    'User-Agent': this.userAgent,
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5,hy;q=0.3'
+                    'User-Agent': ua,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Cache-Control': 'max-age=0',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Referer': origin + '/',
+                    'DNT': '1',
                 },
-                timeout: 10000
+                timeout: 15000,
+                maxRedirects: 5,
             });
 
-            // Rate limiting
             await this.delay(this.requestDelay);
-
             return response.data;
         } catch (error) {
             this.logger.error(`Error fetching ${url}: ${error.message}`);
 
             if (retries < this.maxRetries) {
-                this.logger.info(`Retrying... (${retries + 1}/${this.maxRetries})`);
-                await this.delay(this.requestDelay * 2);
+                const backoff = this.requestDelay * Math.pow(2, retries);
+                this.logger.info(`Retrying... (${retries + 1}/${this.maxRetries}) in ${backoff}ms`);
+                await this.delay(backoff);
                 return this.fetch(url, retries + 1);
             }
 

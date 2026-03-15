@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Armenian OSINT Analytics — Sign In</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --accent: #5b5ef4;
+            --accent-hover: #4a4de0;
+            --bg: #f8f9fc;
+            --card: #ffffff;
+            --border: #e2e5ef;
+            --text: #111827;
+            --muted: #6b7280;
+            --error: #ef4444;
+            --success: #10b981;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .auth-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 32px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--accent);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        .logo-text {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            line-height: 1.2;
+        }
+
+        .logo-sub {
+            font-size: 11px;
+            color: var(--muted);
+            font-weight: 400;
+        }
+
+        h2 {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: var(--muted);
+            margin-bottom: 28px;
+        }
+
+        .tabs {
+            display: flex;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 24px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 8px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--muted);
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            border: none;
+            background: none;
+        }
+
+        .tab.active {
+            background: white;
+            color: var(--text);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1.5px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--text);
+            background: white;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+
+        input:focus {
+            border-color: var(--accent);
+        }
+
+        input::placeholder { color: var(--muted); }
+
+        .btn {
+            width: 100%;
+            padding: 11px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background 0.2s;
+            margin-top: 8px;
+        }
+
+        .btn:hover { background: var(--accent-hover); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .alert {
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .alert.error { background: #fef2f2; color: var(--error); border: 1px solid #fecaca; }
+        .alert.success { background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; }
+        .alert.visible { display: block; }
+
+        .form-panel { display: none; }
+        .form-panel.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="auth-card">
+        <div class="logo">
+            <div class="logo-icon">AM</div>
+            <div>
+                <div class="logo-text">Armenian OSINT</div>
+                <div class="logo-sub">Analytics Platform</div>
+            </div>
+        </div>
+
+        <h2 id="form-title">Welcome back</h2>
+        <p class="subtitle" id="form-subtitle">Sign in to your account to continue</p>
+
+        <div class="tabs">
+            <button class="tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+            <button class="tab" id="tab-register" onclick="switchTab('register')">Create Account</button>
+        </div>
+
+        <div class="alert" id="alert"></div>
+
+        <!-- Login Form -->
+        <div class="form-panel active" id="panel-login">
+            <div class="form-group">
+                <label for="login-email">Email address</label>
+                <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <div class="form-group">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
+            </div>
+            <button class="btn" id="login-btn" onclick="handleLogin()">Sign In</button>
+        </div>
+
+        <!-- Register Form -->
+        <div class="form-panel" id="panel-register">
+            <div class="form-group">
+                <label for="reg-name">Full name</label>
+                <input type="text" id="reg-name" placeholder="Your name" autocomplete="name">
+            </div>
+            <div class="form-group">
+                <label for="reg-email">Email address</label>
+                <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <div class="form-group">
+                <label for="reg-password">Password <span style="color:var(--muted);font-weight:400">(min 6 chars)</span></label>
+                <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password">
+            </div>
+            <button class="btn" id="register-btn" onclick="handleRegister()">Create Account</button>
+        </div>
+    </div>
+
+    <script>
+        // Redirect if already logged in
+        if (localStorage.getItem('auth_token')) {
+            window.location.href = '/';
+        }
+
+        function switchTab(tab) {
+            document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+            document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+            document.getElementById('panel-login').classList.toggle('active', tab === 'login');
+            document.getElementById('panel-register').classList.toggle('active', tab === 'register');
+            document.getElementById('form-title').textContent = tab === 'login' ? 'Welcome back' : 'Create account';
+            document.getElementById('form-subtitle').textContent = tab === 'login'
+                ? 'Sign in to your account to continue'
+                : 'Start analyzing Armenian market data';
+            clearAlert();
+        }
+
+        function showAlert(msg, type) {
+            const el = document.getElementById('alert');
+            el.textContent = msg;
+            el.className = `alert ${type} visible`;
+        }
+
+        function clearAlert() {
+            document.getElementById('alert').className = 'alert';
+        }
+
+        function setLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            btn.disabled = loading;
+            btn.textContent = loading
+                ? (btnId === 'login-btn' ? 'Signing in…' : 'Creating account…')
+                : (btnId === 'login-btn' ? 'Sign In' : 'Create Account');
+        }
+
+        async function handleLogin() {
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            if (!email || !password) return showAlert('Please fill in all fields.', 'error');
+
+            setLoading('login-btn', true);
+            clearAlert();
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    localStorage.setItem('auth_token', data.token);
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
+                    window.location.href = '/';
+                } else {
+                    showAlert(data.error || 'Login failed', 'error');
+                }
+            } catch {
+                showAlert('Connection error. Please try again.', 'error');
+            } finally {
+                setLoading('login-btn', false);
+            }
+        }
+
+        async function handleRegister() {
+            const full_name = document.getElementById('reg-name').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const password = document.getElementById('reg-password').value;
+            if (!email || !password) return showAlert('Email and password are required.', 'error');
+
+            setLoading('register-btn', true);
+            clearAlert();
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, full_name })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    localStorage.setItem('auth_token', data.token);
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
+                    window.location.href = '/';
+                } else {
+                    showAlert(data.error || 'Registration failed', 'error');
+                }
+            } catch {
+                showAlert('Connection error. Please try again.', 'error');
+            } finally {
+                setLoading('register-btn', false);
+            }
+        }
+
+        // Enter key support
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const loginActive = document.getElementById('panel-login').classList.contains('active');
+            if (loginActive) handleLogin();
+            else handleRegister();
+        });
+    </script>
+</body>
+</html>

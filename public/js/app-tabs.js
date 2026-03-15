@@ -1,56 +1,119 @@
-// Tabbed Interface with Chat and SQL Editor
+// Armenian OSINT Analytics — Main App
 class TabManager {
     constructor() {
         this.currentTab = localStorage.getItem('activeTab') || 'chat';
         this.sessionId = this.generateSessionId();
         this.charts = {};
+        this.token = localStorage.getItem('auth_token');
+
+        // Redirect to login if no token
+        if (!this.token) {
+            window.location.href = '/login';
+            return;
+        }
 
         this.init();
+        this.loadUserInfo();
     }
 
     init() {
-        // Initialize tab switching
         this.setupTabs();
-
-        // Initialize chat functionality
         this.setupChat();
-
-        // Initialize SQL editor
         this.setupSQLEditor();
-
-        // Initialize sidebar toggle
         this.setupSidebar();
-
-        // Load active tab from storage
+        this.setupLogout();
         this.switchTab(this.currentTab);
     }
 
     generateSessionId() {
-        return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
     }
 
+    // Auth helpers
+    getAuthHeaders() {
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.token}`
+        };
+    }
+
+    async handleUnauthorized() {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_user');
+        window.location.href = '/login';
+    }
+
+    async authedFetch(url, options = {}) {
+        const res = await fetch(url, {
+            ...options,
+            headers: { ...this.getAuthHeaders(), ...(options.headers || {}) }
+        });
+
+        if (res.status === 401) {
+            await this.handleUnauthorized();
+            throw new Error('Unauthorized');
+        }
+
+        return res;
+    }
+
+    // Load user info from localStorage or server
+    async loadUserInfo() {
+        let user = null;
+        const cached = localStorage.getItem('auth_user');
+        if (cached) {
+            try { user = JSON.parse(cached); } catch (_) {}
+        }
+
+        if (!user) {
+            try {
+                const res = await this.authedFetch('/api/auth/me');
+                const data = await res.json();
+                if (data.success) {
+                    user = data.user;
+                    localStorage.setItem('auth_user', JSON.stringify(user));
+                }
+            } catch (_) {}
+        }
+
+        if (user) {
+            const displayName = user.full_name || user.email.split('@')[0];
+            const initials = displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+
+            const avatarEl = document.getElementById('user-avatar');
+            const nameEl = document.getElementById('user-name');
+            const emailEl = document.getElementById('user-email');
+
+            if (avatarEl) avatarEl.textContent = initials;
+            if (nameEl) nameEl.textContent = displayName;
+            if (emailEl) emailEl.textContent = user.email;
+        }
+    }
+
+    setupLogout() {
+        document.getElementById('logout-btn')?.addEventListener('click', () => {
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('auth_user');
+            window.location.href = '/login';
+        });
+    }
+
+    // ========================================
+    // TABS
+    // ========================================
     setupTabs() {
-        const tabButtons = document.querySelectorAll('.tab-btn');
-        tabButtons.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const tabName = btn.dataset.tab;
-                this.switchTab(tabName);
-            });
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
         });
     }
 
     switchTab(tabName) {
-        // Update buttons
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tab === tabName);
         });
-
-        // Update content
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.toggle('active', content.id === `${tabName}-tab`);
         });
-
-        // Save to localStorage
         localStorage.setItem('activeTab', tabName);
         this.currentTab = tabName;
     }
@@ -58,30 +121,23 @@ class TabManager {
     setupSidebar() {
         const toggle = document.getElementById('sidebar-toggle');
         const sidebar = document.getElementById('sidebar');
-
-        toggle?.addEventListener('click', () => {
-            sidebar.classList.toggle('open');
-        });
+        toggle?.addEventListener('click', () => sidebar.classList.toggle('open'));
     }
 
     // ========================================
-    // CHAT FUNCTIONALITY
+    // CHAT
     // ========================================
-
     setupChat() {
         this.messages = document.getElementById('messages');
         this.input = document.getElementById('message-input');
         this.sendBtn = document.getElementById('send-btn');
         this.welcome = document.getElementById('welcome');
-        this.newChatBtn = document.getElementById('new-chat-btn');
 
-        // Auto-resize textarea
         this.input?.addEventListener('input', () => {
             this.input.style.height = 'auto';
-            this.input.style.height = (this.input.scrollHeight) + 'px';
+            this.input.style.height = this.input.scrollHeight + 'px';
         });
 
-        // Send on Enter
         this.input?.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -89,17 +145,13 @@ class TabManager {
             }
         });
 
-        // Send button
         this.sendBtn?.addEventListener('click', () => this.sendMessage());
 
-        // New chat button
-        this.newChatBtn?.addEventListener('click', () => this.newChat());
+        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.newChat());
 
-        // Suggestion buttons
         document.querySelectorAll('.suggestion').forEach(btn => {
             btn.addEventListener('click', () => {
-                const query = btn.dataset.query;
-                this.input.value = query;
+                this.input.value = btn.dataset.query;
                 this.sendMessage();
             });
         });
@@ -108,15 +160,13 @@ class TabManager {
     newChat() {
         this.sessionId = this.generateSessionId();
         this.messages.innerHTML = '';
-        this.welcome.style.display = 'block';
+        if (this.welcome) this.welcome.style.display = '';
         this.input.value = '';
         this.input.style.height = 'auto';
     }
 
     hideWelcome() {
-        if (this.welcome) {
-            this.welcome.style.display = 'none';
-        }
+        if (this.welcome) this.welcome.style.display = 'none';
     }
 
     async sendMessage() {
@@ -133,9 +183,8 @@ class TabManager {
         const typingId = this.addTyping();
 
         try {
-            const response = await fetch('/api/chat', {
+            const response = await this.authedFetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message: text, sessionId: this.sessionId })
             });
 
@@ -149,7 +198,9 @@ class TabManager {
             }
         } catch (error) {
             this.removeTyping(typingId);
-            this.addMessage('assistant', 'Failed to connect to server.');
+            if (error.message !== 'Unauthorized') {
+                this.addMessage('assistant', 'Failed to connect to server. Please try again.');
+            }
         } finally {
             this.input.disabled = false;
             this.sendBtn.disabled = false;
@@ -158,56 +209,64 @@ class TabManager {
     }
 
     addMessage(role, content) {
-        const messageEl = document.createElement('div');
-        messageEl.className = `message ${role}`;
-        messageEl.innerHTML = `<div class="message-content"><div class="message-text">${this.escapeHtml(content)}</div></div>`;
-        this.messages.appendChild(messageEl);
+        const el = document.createElement('div');
+        el.className = `message ${role}`;
+        el.innerHTML = `
+            <div class="message-content">
+                <div class="message-role">${role === 'user' ? 'You' : 'OSINT Assistant'}</div>
+                <div class="message-text">${this.escapeHtml(content)}</div>
+            </div>`;
+        this.messages.appendChild(el);
         this.scrollToBottom();
-        return messageEl;
+        return el;
     }
 
     addAssistantMessage(data) {
-        const messageEl = document.createElement('div');
-        messageEl.className = 'message assistant';
+        const el = document.createElement('div');
+        el.className = 'message assistant';
 
-        let contentHtml = `<div class="message-text">${this.escapeHtml(data.response)}</div>`;
+        let inner = `<div class="message-role">OSINT Assistant</div>
+                     <div class="message-text">${this.escapeHtml(data.response)}</div>`;
 
-        // Add chart
         if (data.chart && data.data && data.data.length > 0) {
             const chartId = 'chart-' + Date.now();
-            contentHtml += `<div class="message-chart"><canvas id="${chartId}"></canvas></div>`;
+            inner += `<div class="message-chart"><canvas id="${chartId}"></canvas></div>`;
             setTimeout(() => this.createChart(chartId, data.chart, data.data), 100);
-        }
-        // Add table for small datasets
-        else if (data.data && data.data.length > 0 && data.data.length <= 20 && !data.chart) {
-            contentHtml += this.createDataTable(data.data);
+        } else if (data.data && data.data.length > 0 && data.data.length <= 25 && !data.chart) {
+            inner += this.createDataTable(data.data);
         }
 
-        // Add SQL toggle
         if (data.sql) {
             const sqlId = 'sql-' + Date.now();
-            contentHtml += `
-        <button class="sql-toggle" onclick="document.getElementById('${sqlId}').classList.toggle('visible')">
-          View SQL Query
-        </button>
-        <div class="sql-code" id="${sqlId}">${this.escapeHtml(data.sql)}</div>
-      `;
+            inner += `
+                <button class="sql-toggle" onclick="document.getElementById('${sqlId}').classList.toggle('visible')">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                    View SQL
+                </button>
+                <div class="sql-code" id="${sqlId}">${this.escapeHtml(data.sql)}</div>`;
         }
 
-        messageEl.innerHTML = `<div class="message-content">${contentHtml}</div>`;
-        this.messages.appendChild(messageEl);
+        if (data.provider) {
+            inner += `<span class="provider-badge">via ${data.provider}${data.model ? ' · ' + data.model : ''}</span>`;
+        }
+
+        el.innerHTML = `<div class="message-content">${inner}</div>`;
+        this.messages.appendChild(el);
         this.scrollToBottom();
     }
 
     createDataTable(data) {
         if (!data || data.length === 0) return '';
-        const columns = Object.keys(data[0]);
+        const cols = Object.keys(data[0]);
         let html = '<div class="message-table"><table><thead><tr>';
-        columns.forEach(col => html += `<th>${this.escapeHtml(col)}</th>`);
+        cols.forEach(c => { html += `<th>${this.escapeHtml(c)}</th>`; });
         html += '</tr></thead><tbody>';
-        data.slice(0, 20).forEach(row => {
+        data.slice(0, 25).forEach(row => {
             html += '<tr>';
-            columns.forEach(col => html += `<td>${this.escapeHtml(String(row[col] || ''))}</td>`);
+            cols.forEach(c => { html += `<td>${this.escapeHtml(String(row[c] ?? ''))}</td>`; });
             html += '</tr>';
         });
         html += '</tbody></table></div>';
@@ -221,72 +280,72 @@ class TabManager {
         const ctx = canvas.getContext('2d');
         const { type, labelColumn, dataColumns } = chartConfig;
 
-        const labels = data.map(row => row[labelColumn]);
-        const datasets = dataColumns.map((col, index) => ({
+        const labels = data.map(r => r[labelColumn]);
+        const datasets = dataColumns.map((col, i) => ({
             label: col,
-            data: data.map(row => row[col]),
-            backgroundColor: this.getChartColors(type, data.length, index),
-            borderColor: type === 'line' ? this.getLineColor(index) : undefined,
-            borderWidth: type === 'line' ? 2 : 1
+            data: data.map(r => r[col]),
+            backgroundColor: this.getChartColors(type, data.length, i),
+            borderColor: type === 'line' ? this.getLineColor(i) : undefined,
+            borderWidth: type === 'line' ? 2 : 1,
+            borderRadius: type === 'bar' ? 4 : 0
         }));
 
         this.charts[canvasId] = new Chart(ctx, {
-            type: type === 'pie' || type === 'doughnut' ? type : (type === 'line' ? 'line' : 'bar'),
+            type: (type === 'pie' || type === 'doughnut') ? type : (type === 'line' ? 'line' : 'bar'),
             data: { labels, datasets },
             options: {
                 responsive: true,
                 maintainAspectRatio: true,
                 plugins: {
-                    legend: { display: true, position: 'bottom' }
+                    legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 16 } }
                 },
-                scales: type !== 'pie' && type !== 'doughnut' ? { y: { beginAtZero: true } } : undefined
+                scales: (type !== 'pie' && type !== 'doughnut') ? {
+                    y: { beginAtZero: true, grid: { color: '#f0f1f5' } },
+                    x: { grid: { display: false } }
+                } : undefined
             }
         });
     }
 
-    getChartColors(type, count, datasetIndex) {
-        const colors = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316', '#06B6D4', '#84CC16'];
-        return (type === 'pie' || type === 'doughnut') ? colors.slice(0, count) : colors[datasetIndex % colors.length];
+    getChartColors(type, count, idx) {
+        const palette = ['#5b5ef4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#06b6d4','#84cc16'];
+        return (type === 'pie' || type === 'doughnut')
+            ? palette.slice(0, count)
+            : palette[idx % palette.length];
     }
 
-    getLineColor(index) {
-        const colors = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
-        return colors[index % colors.length];
+    getLineColor(idx) {
+        return ['#5b5ef4','#10b981','#f59e0b','#ef4444','#8b5cf6'][idx % 5];
     }
 
     addTyping() {
         const id = 'typing-' + Date.now();
-        const messageEl = document.createElement('div');
-        messageEl.id = id;
-        messageEl.className = 'message assistant';
-        messageEl.innerHTML = `
-      <div class="message-content">
-        <div class="typing">
-          <div class="typing-dot"></div>
-          <div class="typing-dot"></div>
-          <div class="typing-dot"></div>
-        </div>
-      </div>
-    `;
-        this.messages.appendChild(messageEl);
+        const el = document.createElement('div');
+        el.id = id;
+        el.className = 'message assistant';
+        el.innerHTML = `
+            <div class="message-content">
+                <div class="message-role">OSINT Assistant</div>
+                <div class="typing">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>`;
+        this.messages.appendChild(el);
         this.scrollToBottom();
         return id;
     }
 
-    removeTyping(id) {
-        document.getElementById(id)?.remove();
-    }
+    removeTyping(id) { document.getElementById(id)?.remove(); }
 
     scrollToBottom() {
-        if (this.messages) {
-            this.messages.scrollTop = this.messages.scrollHeight;
-        }
+        if (this.messages) this.messages.scrollTop = this.messages.scrollHeight;
     }
 
     // ========================================
-    // SQL EDITOR FUNCTIONALITY
+    // SQL EDITOR
     // ========================================
-
     setupSQLEditor() {
         this.sqlEditor = document.getElementById('sql-editor');
         this.lineNumbers = document.getElementById('line-numbers');
@@ -294,14 +353,10 @@ class TabManager {
         this.clearSQLBtn = document.getElementById('clear-sql-btn');
         this.sqlResults = document.getElementById('sql-results');
 
-        // Update line numbers on input
         this.sqlEditor?.addEventListener('input', () => this.updateLineNumbers());
         this.sqlEditor?.addEventListener('scroll', () => this.syncScroll());
-
-        // Run SQL button
         this.runSQLBtn?.addEventListener('click', () => this.executeSQL());
 
-        // Run SQL with Ctrl+Enter
         this.sqlEditor?.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                 e.preventDefault();
@@ -309,36 +364,36 @@ class TabManager {
             }
         });
 
-        // Clear button
         this.clearSQLBtn?.addEventListener('click', () => {
             this.sqlEditor.value = '';
             this.updateLineNumbers();
-            this.sqlResults.innerHTML = `
-        <div class="results-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-          </svg>
-          <p>Run a query to see results</p>
-        </div>
-      `;
+            this.resetResultsPlaceholder();
         });
 
-        // Initialize line numbers
         this.updateLineNumbers();
+    }
+
+    resetResultsPlaceholder() {
+        this.sqlResults.innerHTML = `
+            <div class="results-placeholder">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                </svg>
+                <p>Run a query to see results</p>
+                <p class="results-hint">Ctrl+Enter to execute</p>
+            </div>`;
     }
 
     updateLineNumbers() {
         if (!this.sqlEditor || !this.lineNumbers) return;
-
         const lines = this.sqlEditor.value.split('\n').length;
         this.lineNumbers.innerHTML = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
     }
 
     syncScroll() {
-        if (!this.sqlEditor || !this.lineNumbers) return;
-        this.lineNumbers.scrollTop = this.sqlEditor.scrollTop;
+        if (this.lineNumbers) this.lineNumbers.scrollTop = this.sqlEditor.scrollTop;
     }
 
     async executeSQL() {
@@ -346,97 +401,76 @@ class TabManager {
         if (!sql) return;
 
         this.runSQLBtn.disabled = true;
-        this.runSQLBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" opacity="0.25"/><path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg> Running...';
+        this.runSQLBtn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="animation:spin 1s linear infinite">
+                <path d="M12 2a10 10 0 1 0 10 10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+            </svg> Running…`;
 
         try {
-            const startTime = Date.now();
-            const response = await fetch('/api/sql/execute', {
+            const response = await this.authedFetch('/api/sql/execute', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ sql })
             });
 
             const data = await response.json();
-            const executionTime = Date.now() - startTime;
 
             if (data.success) {
-                this.displaySQLResults(data.results, executionTime);
+                this.displaySQLResults(data.results, data.executionTime);
             } else {
                 this.displaySQLError(data.error);
             }
         } catch (error) {
-            this.displaySQLError('Failed to execute query: ' + error.message);
+            if (error.message !== 'Unauthorized') {
+                this.displaySQLError('Failed to execute query: ' + error.message);
+            }
         } finally {
             this.runSQLBtn.disabled = false;
-            this.runSQLBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run Query';
+            this.runSQLBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run Query`;
         }
     }
 
     displaySQLResults(results, executionTime) {
         if (!results || results.length === 0) {
             this.sqlResults.innerHTML = `
-        <div class="results-header">
-          <div class="results-info">Query returned <strong>0 rows</strong> in ${executionTime}ms</div>
-        </div>
-        <div class="results-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-          </svg>
-          <p>Query returned no results</p>
-        </div>
-      `;
+                <div class="results-header">
+                    <div class="results-info">Returned <strong>0 rows</strong>${executionTime ? ` in ${executionTime}ms` : ''}</div>
+                </div>
+                <div class="results-placeholder" style="height:auto;padding:32px">
+                    <p>Query returned no results</p>
+                </div>`;
             return;
         }
 
-        const columns = Object.keys(results[0]);
-        let tableHTML = `
-      <div class="results-header">
-        <div class="results-info">
-          Query returned <strong>${results.length} row${results.length !== 1 ? 's' : ''}</strong> in ${executionTime}ms
-        </div>
-      </div>
-      <div class="results-table-wrapper">
-        <table class="results-table">
-          <thead><tr>
-    `;
-
-        columns.forEach(col => {
-            tableHTML += `<th>${this.escapeHtml(col)}</th>`;
-        });
-
-        tableHTML += '</tr></thead><tbody>';
+        const cols = Object.keys(results[0]);
+        let html = `
+            <div class="results-header">
+                <div class="results-info">Returned <strong>${results.length} row${results.length !== 1 ? 's' : ''}</strong>${executionTime ? ` in ${executionTime}ms` : ''}</div>
+            </div>
+            <div class="results-table-wrapper">
+                <table class="results-table">
+                    <thead><tr>${cols.map(c => `<th>${this.escapeHtml(c)}</th>`).join('')}</tr></thead>
+                    <tbody>`;
 
         results.forEach(row => {
-            tableHTML += '<tr>';
-            columns.forEach(col => {
-                const value = row[col] !== null && row[col] !== undefined ? String(row[col]) : '';
-                tableHTML += `<td>${this.escapeHtml(value)}</td>`;
-            });
-            tableHTML += '</tr>';
+            html += '<tr>' + cols.map(c => {
+                const v = row[c] !== null && row[c] !== undefined ? String(row[c]) : '';
+                return `<td>${this.escapeHtml(v)}</td>`;
+            }).join('') + '</tr>';
         });
 
-        tableHTML += '</tbody></table></div>';
-        this.sqlResults.innerHTML = tableHTML;
+        html += '</tbody></table></div>';
+        this.sqlResults.innerHTML = html;
     }
 
     displaySQLError(error) {
-        this.sqlResults.innerHTML = `
-      <div class="error-message">
-        <strong>Error:</strong><br>${this.escapeHtml(error)}
-      </div>
-    `;
+        this.sqlResults.innerHTML = `<div class="error-message"><strong>Error:</strong><br>${this.escapeHtml(error)}</div>`;
     }
 
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
     }
 }
 
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    new TabManager();
-});
+document.addEventListener('DOMContentLoaded', () => { new TabManager(); });
