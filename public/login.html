@@ -214,6 +214,22 @@
             <button class="btn" id="login-btn" onclick="handleLogin()">Sign In</button>
         </div>
 
+        <!-- 2FA Form -->
+        <div class="form-panel" id="panel-totp">
+            <div style="text-align:center;margin-bottom:20px">
+                <div style="width:48px;height:48px;background:#eef2ff;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                </div>
+                <p style="font-size:13px;color:#6b7280">Enter the 6-digit code from your authenticator app</p>
+            </div>
+            <div class="form-group">
+                <label for="totp-code">Authenticator Code</label>
+                <input type="text" id="totp-code" placeholder="000000" maxlength="6" autocomplete="one-time-code" style="letter-spacing:0.2em;text-align:center;font-size:20px;">
+            </div>
+            <button class="btn" id="totp-btn" onclick="handleTOTP()">Verify</button>
+            <button onclick="cancelTOTP()" style="width:100%;background:none;border:none;color:#6b7280;font-size:13px;cursor:pointer;margin-top:12px;font-family:inherit;">← Back to login</button>
+        </div>
+
         <!-- Register Form -->
         <div class="form-panel" id="panel-register">
             <div class="form-group">
@@ -233,10 +249,8 @@
     </div>
 
     <script>
-        // Redirect if already logged in
-        if (localStorage.getItem('auth_token')) {
-            window.location.href = '/';
-        }
+        if (localStorage.getItem('auth_token')) { window.location.href = '/'; }
+        let _partialToken = null;
 
         function switchTab(tab) {
             document.getElementById('tab-login').classList.toggle('active', tab === 'login');
@@ -284,7 +298,10 @@
                 });
                 const data = await res.json();
 
-                if (data.success) {
+                if (data.success && data.requires_2fa) {
+                    _partialToken = data.partial_token;
+                    show2FA();
+                } else if (data.success) {
                     localStorage.setItem('auth_token', data.token);
                     localStorage.setItem('auth_user', JSON.stringify(data.user));
                     window.location.href = '/';
@@ -329,11 +346,56 @@
             }
         }
 
-        // Enter key support
+        function show2FA() {
+            ['panel-login','panel-register'].forEach(id => document.getElementById(id).classList.remove('active'));
+            document.getElementById('panel-totp').classList.add('active');
+            document.getElementById('tab-login').style.display = 'none';
+            document.getElementById('tab-register').style.display = 'none';
+            document.getElementById('form-title').textContent = 'Two-Factor Auth';
+            document.getElementById('form-subtitle').textContent = 'Enter the code from your authenticator app';
+            clearAlert();
+            setTimeout(() => document.getElementById('totp-code').focus(), 100);
+        }
+
+        function cancelTOTP() {
+            _partialToken = null;
+            document.getElementById('totp-code').value = '';
+            document.getElementById('panel-totp').classList.remove('active');
+            document.getElementById('panel-login').classList.add('active');
+            document.getElementById('tab-login').style.display = '';
+            document.getElementById('tab-register').style.display = '';
+            switchTab('login');
+        }
+
+        async function handleTOTP() {
+            const code = document.getElementById('totp-code').value.trim();
+            if (code.length !== 6) return showAlert('Enter your 6-digit code.', 'error');
+            const btn = document.getElementById('totp-btn');
+            btn.disabled = true; btn.textContent = 'Verifying…'; clearAlert();
+            try {
+                const res = await fetch('/api/auth/2fa/validate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ partial_token: _partialToken, code })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    localStorage.setItem('auth_token', data.token);
+                    localStorage.setItem('auth_user', JSON.stringify(data.user));
+                    window.location.href = '/';
+                } else {
+                    showAlert(data.error || 'Invalid code', 'error');
+                }
+            } catch { showAlert('Connection error.', 'error'); }
+            finally { btn.disabled = false; btn.textContent = 'Verify'; }
+        }
+
         document.addEventListener('keydown', (e) => {
             if (e.key !== 'Enter') return;
+            const totpActive = document.getElementById('panel-totp').classList.contains('active');
             const loginActive = document.getElementById('panel-login').classList.contains('active');
-            if (loginActive) handleLogin();
+            if (totpActive) handleTOTP();
+            else if (loginActive) handleLogin();
             else handleRegister();
         });
     </script>

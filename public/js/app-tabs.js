@@ -22,6 +22,8 @@ class TabManager {
         this.setupSQLEditor();
         this.setupSidebar();
         this.setupLogout();
+        this.setupSecurityTab();
+        this.setupGraphTab();
         this.switchTab(this.currentTab);
         this.loadSessions();
     }
@@ -155,6 +157,44 @@ class TabManager {
     }
 
     // ========================================
+    // SECURITY TAB
+    // ========================================
+    setupSecurityTab() {
+        this._securityManager = new SecurityManager(this)
+    }
+
+    // ========================================
+    // GRAPH TAB
+    // ========================================
+    setupGraphTab() {
+        this._graph = null
+        this._graphLoaded = false
+    }
+
+    async initGraph() {
+        if (this._graphLoaded) return
+        const svgEl = document.getElementById('network-svg')
+        if (!svgEl || typeof NetworkGraph === 'undefined') return
+        this._graph = new NetworkGraph(svgEl)
+
+        try {
+            const res = await this.authedFetch('/api/data/graph')
+            const data = await res.json()
+            if (!data.success) return
+            this._graph.load(data.nodes, data.edges)
+            this._graph.buildLegend()
+            const info = document.getElementById('graph-info')
+            if (info) info.textContent = `${data.nodes.length} companies, ${data.edges.length} connections`
+        } catch { /* non-fatal */ }
+
+        document.getElementById('graph-reset-btn')?.addEventListener('click', () => this._graph?.resetLayout())
+        document.getElementById('graph-filter')?.addEventListener('change', (e) => {
+            this._graph?.applyFilter(e.target.value)
+        })
+        this._graphLoaded = true
+    }
+
+    // ========================================
     // TABS
     // ========================================
     setupTabs() {
@@ -172,6 +212,16 @@ class TabManager {
         });
         localStorage.setItem('activeTab', tabName);
         this.currentTab = tabName;
+
+        if (tabName === 'security' && this._securityManager) {
+            this._securityManager.render();
+        }
+        if (tabName === 'graph') {
+            this.initGraph();
+            if (this._graph) this._graph.restart();
+        } else if (this._graph) {
+            this._graph.stop();
+        }
     }
 
     setupSidebar() {

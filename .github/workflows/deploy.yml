@@ -19,11 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      deployments: write   # needed for CF Pages deployment status
-      pull-requests: write # needed to post preview URL comment on PRs
+      deployments: write
+      pull-requests: write
 
     outputs:
-      deployment-url: ${{ steps.pages.outputs.deployment-url }}
+      deployment-url: ${{ steps.pages-main.outputs.deployment-url || steps.pages-pr.outputs.deployment-url }}
 
     steps:
       - name: Checkout
@@ -37,21 +37,31 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Deploy to Cloudflare Pages
-        id: pages
+      - name: Deploy to Cloudflare Pages (main branch → production)
+        id: pages-main
+        if: github.ref == 'refs/heads/main'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # On main → production deploy; on PRs → preview deploy
-          command: pages deploy public --project-name=armdata --commit-dirty=true ${{ github.ref == 'refs/heads/main' && '--branch=main' || '' }}
+          command: pages deploy public --project-name=armdata --branch=main
+
+      - name: Deploy to Cloudflare Pages (PR → preview)
+        id: pages-pr
+        if: github.event_name == 'pull_request'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy public --project-name=armdata
 
       - name: Comment preview URL on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const url = '${{ steps.pages.outputs.deployment-url }}'
+            const url = '${{ steps.pages-pr.outputs.deployment-url }}'
+            if (!url) return
             const body = `## 🚀 Preview Deployment\n\n**URL:** ${url}\n\n*Deployed from commit \`${{ github.sha }}\`*`
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -73,13 +83,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run migrations
+      - name: Run schema migration
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # IF NOT EXISTS in every statement makes this safe to run on every deploy
           command: d1 execute armdata-db --remote --file=migrations/0001_schema.sql
+
+      - name: Run security migration
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 execute armdata-db --remote --file=migrations/0002_security.sql
 
   # ──────────────────────────────────────────
   # Deploy scraper Worker (main branch only)

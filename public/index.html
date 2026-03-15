@@ -33,18 +33,31 @@
             <!-- Tab Switcher -->
             <div class="tab-switcher">
                 <button class="tab-btn active" data-tab="chat">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
                     Chat
                 </button>
                 <button class="tab-btn" data-tab="database">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
                         <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
                         <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
                     </svg>
-                    Database
+                    SQL
+                </button>
+                <button class="tab-btn" data-tab="security">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    </svg>
+                    Security
+                </button>
+                <button class="tab-btn" data-tab="graph">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                    </svg>
+                    Graph
                 </button>
             </div>
 
@@ -188,10 +201,38 @@ SELECT * FROM companies LIMIT 10;" spellcheck="false"></textarea>
                     </div>
                 </div>
             </div>
+
+            <!-- Security Tab -->
+            <div class="tab-content" id="security-tab">
+                <div class="security-container" id="security-container"></div>
+            </div>
+
+            <!-- Graph Tab -->
+            <div class="tab-content" id="graph-tab">
+                <div class="graph-container">
+                    <div class="graph-toolbar">
+                        <div class="graph-toolbar-left">
+                            <span class="graph-title">Company Network Graph</span>
+                            <span class="graph-subtitle" id="graph-info">Loading…</span>
+                        </div>
+                        <div class="graph-toolbar-right">
+                            <select id="graph-filter" class="graph-select">
+                                <option value="">All industries</option>
+                            </select>
+                            <button id="graph-reset-btn" class="btn-secondary" style="font-size:12px;padding:5px 10px;">Reset Layout</button>
+                        </div>
+                    </div>
+                    <svg id="network-svg" class="network-svg"></svg>
+                    <div id="graph-tooltip" class="graph-tooltip" style="display:none"></div>
+                    <div class="graph-legend" id="graph-legend"></div>
+                </div>
+            </div>
         </main>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/js/network-graph.js"></script>
+    <script src="/js/security.js"></script>
     <script src="/js/app-tabs.js"></script>
 </body>
 </html>
