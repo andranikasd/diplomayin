@@ -547,6 +547,18 @@ app.post('/sql/execute', (c) => requireAuth(c, async () => {
         return c.json({ success: false, error: 'Only SELECT queries are allowed' }, 400)
     }
 
+    // Blocklist private/system tables — only data-platform tables are queryable
+    const PRIVATE_TABLES = ['users', 'sessions', 'audit_log', 'ip_rules', 'anomalies', 'totp_secrets', 'rate_limits', 'scraper_jobs']
+    const mentionedPrivate = PRIVATE_TABLES.filter(t => {
+        // Match whole-word table name (not as a substring of another word)
+        const re = new RegExp(`(?<![\\w])${t}(?![\\w])`, 'i')
+        return re.test(sql)
+    })
+    if (mentionedPrivate.length > 0) {
+        await audit(c.env.DB, { userId: user.id, action: 'sql_blocked_private_table', ip, metadata: { tables: mentionedPrivate, sql: sql.slice(0, 200) }, severity: 'high' })
+        return c.json({ success: false, error: `Access denied: table(s) [${mentionedPrivate.join(', ')}] are restricted. Queryable tables: companies, news_articles, statistics, market_trends.` }, 403)
+    }
+
     try {
         const start = Date.now()
         const { results } = await c.env.DB.prepare(sql).all()
@@ -839,6 +851,122 @@ app.get('/security/intel/exposure/:email', (c) => requireAuth(c, async () => {
 
     return c.json({ success: true, data: results })
 }))
+
+// ─────────────────────────────────────────────────────────────
+// GOOGLE OAUTH 2.0
+// ─────────────────────────────────────────────────────────────
+
+// GET /auth/google  →  redirect to Google consent screen
+app.get('/auth/google', (c) => {
+    const clientId = c.env.GOOGLE_CLIENT_ID
+    if (!clientId) {
+        const origin = new URL(c.req.url).origin
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google SSO not configured. Set GOOGLE_CLIENT_ID secret.')}`, 302)
+    }
+    const origin      = new URL(c.req.url).origin
+    const redirectUri = `${origin}/api/auth/google/callback`
+    const url         = new URL('https://accounts.google.com/o/oauth2/v2/auth')
+    url.searchParams.set('client_id',     clientId)
+    url.searchParams.set('redirect_uri',  redirectUri)
+    url.searchParams.set('response_type', 'code')
+    url.searchParams.set('scope',         'openid email profile')
+    url.searchParams.set('access_type',   'online')
+    url.searchParams.set('prompt',        'select_account')
+    return Response.redirect(url.toString(), 302)
+})
+
+// GET /auth/google/callback  →  exchange code, find/create user, redirect with JWT
+app.get('/auth/google/callback', async (c) => {
+    const origin       = new URL(c.req.url).origin
+    const clientId     = c.env.GOOGLE_CLIENT_ID
+    const clientSecret = c.env.GOOGLE_CLIENT_SECRET
+    const code         = c.req.query('code')
+    const errParam     = c.req.query('error')
+
+    if (errParam || !code) {
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google login was cancelled.')}`, 302)
+    }
+    if (!clientId || !clientSecret) {
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google OAuth not configured.')}`, 302)
+    }
+
+    const redirectUri = `${origin}/api/auth/google/callback`
+
+    // Exchange authorization code for tokens
+    let tokens
+    try {
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body:    new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' })
+        })
+        tokens = await tokenRes.json()
+        if (!tokens.access_token) throw new Error('No access token')
+    } catch (err) {
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Failed to exchange Google token.')}`, 302)
+    }
+
+    // Get user profile from Google
+    let googleUser
+    try {
+        const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: `Bearer ${tokens.access_token}` }
+        })
+        googleUser = await userRes.json()
+        if (!googleUser.email) throw new Error('No email')
+    } catch {
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Failed to fetch Google profile.')}`, 302)
+    }
+
+    const DB    = c.env.DB
+    const email = googleUser.email.toLowerCase()
+
+    try {
+        // Find existing user or create new one
+        let user = await DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first()
+
+        if (!user) {
+            const result = await DB.prepare(
+                'INSERT INTO users (email, full_name, password_hash, role, is_active) VALUES (?,?,?,?,1) RETURNING *'
+            ).bind(email, googleUser.name || email.split('@')[0], 'google-oauth', 'analyst').first()
+            user = result
+        }
+
+        if (!user.is_active) {
+            return Response.redirect(`${origin}/login?error=${encodeURIComponent('Account is disabled.')}`, 302)
+        }
+
+        await DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id).run()
+        await audit(DB, { userId: user.id, action: 'google_login', ip: c.req.header('CF-Connecting-IP') })
+
+        const token = await signJWT({ id: user.id, email: user.email, role: user.role }, getSecret(c.env))
+        return Response.redirect(`${origin}/login?token=${token}`, 302)
+    } catch (err) {
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Authentication failed.')}`, 302)
+    }
+})
+
+// POST /auth/setup  →  first-run admin setup (only works with 0 users)
+app.post('/auth/setup', async (c) => {
+    const DB = c.env.DB
+    try {
+        const row = await DB.prepare('SELECT COUNT(*) AS n FROM users').first()
+        if ((row?.n ?? 1) > 0) return c.json({ success: false, error: 'Setup already completed' }, 403)
+
+        const { email, password, full_name } = await c.req.json()
+        if (!email || !password || password.length < 8) return c.json({ success: false, error: 'Email and password (min 8 chars) required' }, 400)
+
+        const hash   = await hashPassword(password)
+        const result = await DB.prepare(
+            'INSERT INTO users (email, full_name, password_hash, role) VALUES (?,?,?,?) RETURNING *'
+        ).bind(email.toLowerCase(), full_name || 'Admin', hash, 'admin').first()
+
+        const token = await signJWT({ id: result.id, email: result.email, role: result.role }, getSecret(c.env))
+        return c.json({ success: true, message: 'Admin account created', token, user: { id: result.id, email: result.email, role: result.role, full_name: result.full_name } }, 201)
+    } catch (err) {
+        return c.json({ success: false, error: err.message }, 500)
+    }
+})
 
 // ─────────────────────────────────────────────────────────────
 // Export for CF Pages

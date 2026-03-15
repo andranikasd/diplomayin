@@ -1,584 +1,469 @@
-// Armenian OSINT Analytics — Main App
+/**
+ * Armenian OSINT Analytics — Tab Manager
+ * Handles all UI: chat, SQL editor, security, graph, session history
+ */
 class TabManager {
     constructor() {
-        this.currentTab = localStorage.getItem('activeTab') || 'chat';
-        this.sessionId = this.generateSessionId();
-        this.charts = {};
-        this.token = localStorage.getItem('auth_token');
+        this.token     = localStorage.getItem('auth_token')
+        this.sessionId = this._newSessionId()
+        this.charts    = {}
+        this._graph    = null
+        this._graphLoaded = false
+        this._securityManager = null
 
-        // Redirect to login if no token
-        if (!this.token) {
-            window.location.href = '/login';
-            return;
+        if (!this.token) { window.location.href = '/login'; return }
+
+        this._init()
+        this._loadUserInfo()
+    }
+
+    _newSessionId() {
+        return 'sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9)
+    }
+
+    // ── Auth helpers ─────────────────────────────────────────────
+    _headers() {
+        return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.token}` }
+    }
+
+    async _fetch(url, opts = {}) {
+        const res = await fetch(url, { ...opts, headers: { ...this._headers(), ...(opts.headers || {}) } })
+        if (res.status === 401) { this._logout(); throw new Error('Unauthorized') }
+        return res
+    }
+
+    _logout() {
+        localStorage.removeItem('auth_token')
+        localStorage.removeItem('auth_user')
+        window.location.href = '/login'
+    }
+
+    // ── Init ─────────────────────────────────────────────────────
+    _init() {
+        this._setupNav()
+        this._setupChat()
+        this._setupSQLEditor()
+        this._setupSidebar()
+        this._setupLogout()
+
+        // Security tab
+        if (typeof SecurityManager !== 'undefined') {
+            this._securityManager = new SecurityManager(this)
         }
 
-        this.init();
-        this.loadUserInfo();
+        // Switch to last active tab
+        const lastTab = localStorage.getItem('activeTab') || 'chat'
+        this._switchTab(lastTab)
+
+        // Load chat history
+        this._loadSessions()
     }
 
-    init() {
-        this.setupTabs();
-        this.setupChat();
-        this.setupSQLEditor();
-        this.setupSidebar();
-        this.setupLogout();
-        this.setupSecurityTab();
-        this.setupGraphTab();
-        this.switchTab(this.currentTab);
-        this.loadSessions();
-    }
-
-    generateSessionId() {
-        return 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
-    }
-
-    // Auth helpers
-    getAuthHeaders() {
-        return {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.token}`
-        };
-    }
-
-    async handleUnauthorized() {
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_user');
-        window.location.href = '/login';
-    }
-
-    async authedFetch(url, options = {}) {
-        const res = await fetch(url, {
-            ...options,
-            headers: { ...this.getAuthHeaders(), ...(options.headers || {}) }
-        });
-
-        if (res.status === 401) {
-            await this.handleUnauthorized();
-            throw new Error('Unauthorized');
-        }
-
-        return res;
-    }
-
-    // Load user info from localStorage or server
-    async loadUserInfo() {
-        let user = null;
-        const cached = localStorage.getItem('auth_user');
-        if (cached) {
-            try { user = JSON.parse(cached); } catch (_) {}
-        }
-
+    async _loadUserInfo() {
+        let user = null
+        try { user = JSON.parse(localStorage.getItem('auth_user') || '') } catch { /**/ }
         if (!user) {
             try {
-                const res = await this.authedFetch('/api/auth/me');
-                const data = await res.json();
-                if (data.success) {
-                    user = data.user;
-                    localStorage.setItem('auth_user', JSON.stringify(user));
-                }
-            } catch (_) {}
+                const res  = await this._fetch('/api/auth/me')
+                const data = await res.json()
+                if (data.success) { user = data.user; localStorage.setItem('auth_user', JSON.stringify(user)) }
+            } catch { /**/ }
         }
+        if (!user) return
 
-        if (user) {
-            const displayName = user.full_name || user.email.split('@')[0];
-            const initials = displayName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
-
-            const avatarEl = document.getElementById('user-avatar');
-            const nameEl = document.getElementById('user-name');
-            const emailEl = document.getElementById('user-email');
-
-            if (avatarEl) avatarEl.textContent = initials;
-            if (nameEl) nameEl.textContent = displayName;
-            if (emailEl) emailEl.textContent = user.email;
-        }
+        const name = user.full_name || user.email.split('@')[0]
+        const init = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+        const el = id => document.getElementById(id)
+        if (el('user-avatar')) el('user-avatar').textContent = init
+        if (el('user-name'))   el('user-name').textContent   = name
+        if (el('user-email'))  el('user-email').textContent  = user.email
     }
 
-    // ========================================
-    // CHAT SESSIONS (sidebar history)
-    // ========================================
-    async loadSessions() {
-        const historyEl = document.getElementById('chat-history');
-        if (!historyEl) return;
+    // ── Session history ──────────────────────────────────────────
+    async _loadSessions() {
+        const el = document.getElementById('chat-history')
+        if (!el) return
         try {
-            const res = await this.authedFetch('/api/chat/sessions');
-            const data = await res.json();
+            const res  = await this._fetch('/api/chat/sessions')
+            const data = await res.json()
             if (!data.success || !data.sessions?.length) {
-                historyEl.innerHTML = '<p class="empty-history">No previous chats</p>';
-                return;
+                el.innerHTML = '<p class="empty-history">No previous chats</p>'
+                return
             }
-            historyEl.innerHTML = data.sessions.map(s => {
-                const title = this.escapeHtml((s.title || 'Untitled chat').slice(0, 48));
-                const date = s.last_message ? new Date(s.last_message).toLocaleDateString() : '';
-                return `<div class="history-item" data-session="${this.escapeHtml(s.session_id)}" title="${title}">
+            el.innerHTML = data.sessions.map(s => {
+                const title = this._esc((s.title || 'Untitled').slice(0, 50))
+                const date  = s.last_message ? new Date(s.last_message).toLocaleDateString('en-GB', { day:'numeric', month:'short' }) : ''
+                return `<div class="history-item" data-session="${this._esc(s.session_id)}" title="${title}">
                     <span class="history-item-text">${title}</span>
                     <span class="history-item-date">${date}</span>
-                </div>`;
-            }).join('');
-            historyEl.querySelectorAll('.history-item').forEach(el => {
-                el.addEventListener('click', () => this.openSession(el.dataset.session));
-            });
-        } catch { /* non-fatal */ }
+                </div>`
+            }).join('')
+            el.querySelectorAll('.history-item').forEach(item =>
+                item.addEventListener('click', () => this._openSession(item.dataset.session))
+            )
+        } catch { /**/ }
     }
 
-    async openSession(sessionId) {
-        this.sessionId = sessionId;
-        this.messages.innerHTML = '';
-        if (this.welcome) this.welcome.style.display = 'none';
+    async _openSession(sessionId) {
+        this.sessionId = sessionId
+        this._msgs.innerHTML = ''
+        if (this._welcome) this._welcome.style.display = 'none'
         try {
-            const res = await this.authedFetch(`/api/chat/history/${sessionId}`);
-            const data = await res.json();
+            const res  = await this._fetch(`/api/chat/history/${sessionId}`)
+            const data = await res.json()
             if (data.success && data.history?.length) {
                 data.history.forEach(h => {
-                    this.addMessage('user', h.user_message);
+                    this._addMsg('user', h.user_message)
                     if (h.assistant_response) {
-                        // Reconstruct assistant message from stored data
-                        const el = document.createElement('div');
-                        el.className = 'message assistant';
+                        const el = document.createElement('div')
+                        el.className = 'message assistant'
                         el.innerHTML = `<div class="message-content">
                             <div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
-                            <div class="message-text">${this.escapeHtml(h.assistant_response)}</div>
-                        </div>`;
-                        this.messages.appendChild(el);
+                            <div class="message-text">${this._esc(h.assistant_response)}</div>
+                        </div>`
+                        this._msgs.appendChild(el)
                     }
-                });
-                this.scrollToBottom();
+                })
+                this._scrollBottom()
             }
-        } catch { /* non-fatal */ }
-        // Switch to chat tab
-        this.switchTab('chat');
+        } catch { /**/ }
+        this._switchTab('chat')
     }
 
-    setupLogout() {
-        document.getElementById('logout-btn')?.addEventListener('click', () => {
-            localStorage.removeItem('auth_token');
-            localStorage.removeItem('auth_user');
-            window.location.href = '/login';
-        });
+    // ── Navigation ───────────────────────────────────────────────
+    _setupNav() {
+        document.querySelectorAll('.nav-item[data-tab]').forEach(btn =>
+            btn.addEventListener('click', () => this._switchTab(btn.dataset.tab))
+        )
     }
 
-    // ========================================
-    // SECURITY TAB
-    // ========================================
-    setupSecurityTab() {
-        this._securityManager = new SecurityManager(this)
+    _switchTab(tab) {
+        // Update nav buttons
+        document.querySelectorAll('.nav-item[data-tab]').forEach(btn =>
+            btn.classList.toggle('active', btn.dataset.tab === tab)
+        )
+        // Update content panels
+        document.querySelectorAll('.tab-content').forEach(c =>
+            c.classList.toggle('active', c.id === `${tab}-tab`)
+        )
+        localStorage.setItem('activeTab', tab)
+
+        // Tab-specific actions
+        if (tab === 'security' && this._securityManager) {
+            this._securityManager.render()
+        }
+        if (tab === 'graph') {
+            this._initGraph()
+            if (this._graph) this._graph.restart()
+        } else if (this._graph) {
+            this._graph.stop()
+        }
     }
 
-    // ========================================
-    // GRAPH TAB
-    // ========================================
-    setupGraphTab() {
-        this._graph = null
-        this._graphLoaded = false
+    _setupSidebar() {
+        const toggle  = document.getElementById('sidebar-toggle')
+        const sidebar = document.getElementById('sidebar')
+        toggle?.addEventListener('click', () => sidebar?.classList.toggle('open'))
+        // Close on outside click (mobile)
+        document.addEventListener('click', (e) => {
+            if (sidebar?.classList.contains('open') && !sidebar.contains(e.target) && e.target !== toggle) {
+                sidebar.classList.remove('open')
+            }
+        })
     }
 
-    async initGraph() {
+    _setupLogout() {
+        document.getElementById('logout-btn')?.addEventListener('click', () => this._logout())
+    }
+
+    // ── Chat ─────────────────────────────────────────────────────
+    _setupChat() {
+        this._msgs    = document.getElementById('messages')
+        this._input   = document.getElementById('message-input')
+        this._sendBtn = document.getElementById('send-btn')
+        this._welcome = document.getElementById('welcome')
+
+        this._input?.addEventListener('input', () => {
+            this._input.style.height = 'auto'
+            this._input.style.height = Math.min(this._input.scrollHeight, 160) + 'px'
+        })
+        this._input?.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._send() }
+        })
+        this._sendBtn?.addEventListener('click', () => this._send())
+        document.getElementById('new-chat-btn')?.addEventListener('click', () => this._newChat())
+        document.querySelectorAll('.suggestion').forEach(btn =>
+            btn.addEventListener('click', () => { this._input.value = btn.dataset.query; this._send() })
+        )
+    }
+
+    _newChat() {
+        this.sessionId = this._newSessionId()
+        this._msgs.innerHTML = ''
+        if (this._welcome) this._welcome.style.display = ''
+        this._input.value = ''
+        this._input.style.height = 'auto'
+        this._switchTab('chat')
+    }
+
+    async _send() {
+        const text = this._input?.value.trim()
+        if (!text) return
+
+        if (this._welcome) this._welcome.style.display = 'none'
+        this._addMsg('user', text)
+        this._input.value = ''
+        this._input.style.height = 'auto'
+        this._input.disabled = true
+        this._sendBtn.disabled = true
+
+        const typingId = this._addTyping()
+
+        try {
+            const res  = await this._fetch('/api/chat', {
+                method: 'POST',
+                body:   JSON.stringify({ message: text, sessionId: this.sessionId })
+            })
+            const data = await res.json()
+            this._removeTyping(typingId)
+
+            if (data.success) {
+                this._addAssistantMsg(data)
+                // Refresh session history after successful message
+                this._loadSessions()
+            } else {
+                this._addMsg('assistant', data.response || data.error || 'An error occurred.')
+            }
+        } catch (err) {
+            this._removeTyping(typingId)
+            if (err.message !== 'Unauthorized') {
+                this._addMsg('assistant', 'Failed to connect to server. Please check your connection.')
+            }
+        } finally {
+            this._input.disabled = false
+            this._sendBtn.disabled = false
+            this._input.focus()
+        }
+    }
+
+    _addMsg(role, content) {
+        const el  = document.createElement('div')
+        el.className = `message ${role}`
+        const label = role === 'user' ? 'You' : 'OSINT Assistant'
+        el.innerHTML = `<div class="message-content">
+            <div class="message-role"><span class="message-role-dot"></span>${label}</div>
+            <div class="message-text">${this._esc(content)}</div>
+        </div>`
+        this._msgs.appendChild(el)
+        this._scrollBottom()
+        return el
+    }
+
+    _addAssistantMsg(data) {
+        const el  = document.createElement('div')
+        el.className = 'message assistant'
+
+        let inner = `<div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
+                     <div class="message-text">${this._esc(data.response)}</div>`
+
+        if (data.chart && data.data?.length) {
+            const cid = 'chart-' + Date.now()
+            inner += `<div class="message-chart"><canvas id="${cid}"></canvas></div>`
+            setTimeout(() => this._renderChart(cid, data.chart, data.data), 100)
+        } else if (data.data?.length && data.data.length <= 30 && !data.chart) {
+            inner += this._renderTable(data.data)
+        }
+
+        if (data.sql) {
+            const sid = 'sql-' + Date.now()
+            inner += `<button class="sql-toggle" onclick="document.getElementById('${sid}').classList.toggle('visible')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+                </svg>View SQL</button>
+                <div class="sql-code" id="${sid}">${this._esc(data.sql)}</div>`
+        }
+
+        if (data.provider) {
+            inner += `<span class="provider-badge">via ${data.provider}${data.model ? ' · ' + data.model : ''}</span>`
+        }
+
+        el.innerHTML = `<div class="message-content">${inner}</div>`
+        this._msgs.appendChild(el)
+        this._scrollBottom()
+    }
+
+    _renderTable(rows) {
+        if (!rows?.length) return ''
+        const cols = Object.keys(rows[0])
+        let h = '<div class="message-table"><table><thead><tr>'
+        cols.forEach(c => { h += `<th>${this._esc(c)}</th>` })
+        h += '</tr></thead><tbody>'
+        rows.slice(0, 30).forEach(row => {
+            h += '<tr>'
+            cols.forEach(c => { h += `<td>${this._esc(String(row[c] ?? ''))}</td>` })
+            h += '</tr>'
+        })
+        h += '</tbody></table></div>'
+        return h
+    }
+
+    _renderChart(canvasId, cfg, data) {
+        const canvas = document.getElementById(canvasId)
+        if (!canvas || typeof Chart === 'undefined') return
+        const { type, labelColumn, dataColumns } = cfg
+        const palette = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#06b6d4','#84cc16']
+        const labels   = data.map(r => r[labelColumn])
+        const isPie    = type === 'pie' || type === 'doughnut'
+        const datasets = dataColumns.map((col, i) => ({
+            label:           col,
+            data:            data.map(r => r[col]),
+            backgroundColor: isPie ? palette.slice(0, data.length) : palette[i % palette.length],
+            borderColor:     type === 'line' ? palette[i % palette.length] : undefined,
+            borderWidth:     type === 'line' ? 2 : 0,
+            borderRadius:    type === 'bar'  ? 4 : 0,
+        }))
+        this.charts[canvasId] = new Chart(canvas.getContext('2d'), {
+            type: isPie ? type : (type === 'line' ? 'line' : 'bar'),
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { position: 'bottom', labels: { boxWidth: 12, padding: 14, color: '#8892b0' } }
+                },
+                scales: isPie ? undefined : {
+                    y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8892b0' } },
+                    x: { grid: { display: false }, ticks: { color: '#8892b0' } }
+                }
+            }
+        })
+    }
+
+    _addTyping() {
+        const id = 'typing-' + Date.now()
+        const el = document.createElement('div')
+        el.id = id; el.className = 'message assistant'
+        el.innerHTML = `<div class="message-content">
+            <div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
+            <div class="typing"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
+        </div>`
+        this._msgs.appendChild(el)
+        this._scrollBottom()
+        return id
+    }
+    _removeTyping(id) { document.getElementById(id)?.remove() }
+    _scrollBottom()   { if (this._msgs) this._msgs.scrollTop = this._msgs.scrollHeight }
+
+    // ── SQL Editor ───────────────────────────────────────────────
+    _setupSQLEditor() {
+        this._sqlEd   = document.getElementById('sql-editor')
+        this._lineNos = document.getElementById('line-numbers')
+        this._runBtn  = document.getElementById('run-sql-btn')
+        this._sqlRes  = document.getElementById('sql-results')
+
+        this._sqlEd?.addEventListener('input',  () => this._updateLineNos())
+        this._sqlEd?.addEventListener('scroll', () => { if (this._lineNos) this._lineNos.scrollTop = this._sqlEd.scrollTop })
+        this._runBtn?.addEventListener('click',  () => this._runSQL())
+        this._sqlEd?.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); this._runSQL() } })
+        document.getElementById('clear-sql-btn')?.addEventListener('click', () => {
+            this._sqlEd.value = ''
+            this._updateLineNos()
+            this._resetSQLPlaceholder()
+        })
+        this._updateLineNos()
+    }
+
+    _updateLineNos() {
+        if (!this._sqlEd || !this._lineNos) return
+        const n = this._sqlEd.value.split('\n').length
+        this._lineNos.innerHTML = Array.from({ length: n }, (_, i) => i + 1).join('\n')
+    }
+
+    _resetSQLPlaceholder() {
+        this._sqlRes.innerHTML = `<div class="results-placeholder">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/>
+                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+            <p>Run a query to see results</p>
+            <p class="results-hint">Ctrl+Enter to execute</p>
+        </div>`
+    }
+
+    async _runSQL() {
+        const sql = this._sqlEd?.value.trim()
+        if (!sql) return
+        this._runBtn.disabled = true
+        this._runBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin" style="animation:spin 1s linear infinite"><path d="M12 2a10 10 0 1 0 10 10" stroke-linecap="round"/></svg> Running…`
+        try {
+            const res  = await this._fetch('/api/sql/execute', { method: 'POST', body: JSON.stringify({ sql }) })
+            const data = await res.json()
+            if (data.success) {
+                this._showSQLResults(data.results, data.executionTime)
+            } else {
+                this._sqlRes.innerHTML = `<div class="error-message"><strong>Error:</strong><br>${this._esc(data.error)}</div>`
+            }
+        } catch (err) {
+            if (err.message !== 'Unauthorized') {
+                this._sqlRes.innerHTML = `<div class="error-message"><strong>Error:</strong><br>${this._esc(err.message)}</div>`
+            }
+        } finally {
+            this._runBtn.disabled = false
+            this._runBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run Query`
+        }
+    }
+
+    _showSQLResults(rows, ms) {
+        if (!rows?.length) {
+            this._sqlRes.innerHTML = `<div class="results-header"><div class="results-info">Returned <strong>0 rows</strong>${ms ? ` in ${ms}ms` : ''}</div></div>
+                <div class="results-placeholder" style="height:auto;padding:32px"><p>Query returned no results</p></div>`
+            return
+        }
+        const cols = Object.keys(rows[0])
+        let h = `<div class="results-header"><div class="results-info">Returned <strong>${rows.length} row${rows.length !== 1 ? 's' : ''}</strong>${ms ? ` in ${ms}ms` : ''}</div></div>
+            <div class="results-table-wrapper"><table class="results-table">
+            <thead><tr>${cols.map(c => `<th>${this._esc(c)}</th>`).join('')}</tr></thead><tbody>`
+        rows.forEach(row => {
+            h += '<tr>' + cols.map(c => `<td>${this._esc(String(row[c] ?? ''))}</td>`).join('') + '</tr>'
+        })
+        h += '</tbody></table></div>'
+        this._sqlRes.innerHTML = h
+    }
+
+    // ── Graph ────────────────────────────────────────────────────
+    async _initGraph() {
         if (this._graphLoaded) return
         const svgEl = document.getElementById('network-svg')
         if (!svgEl || typeof NetworkGraph === 'undefined') return
         this._graph = new NetworkGraph(svgEl)
 
         try {
-            const res = await this.authedFetch('/api/data/graph')
+            const res  = await this._fetch('/api/data/graph')
             const data = await res.json()
             if (!data.success) return
             this._graph.load(data.nodes, data.edges)
             this._graph.buildLegend()
             const info = document.getElementById('graph-info')
-            if (info) info.textContent = `${data.nodes.length} companies, ${data.edges.length} connections`
-        } catch { /* non-fatal */ }
+            if (info) info.textContent = `${data.nodes.length} companies · ${data.edges.length} connections`
+        } catch { /**/ }
 
         document.getElementById('graph-reset-btn')?.addEventListener('click', () => this._graph?.resetLayout())
-        document.getElementById('graph-filter')?.addEventListener('change', (e) => {
-            this._graph?.applyFilter(e.target.value)
-        })
+        document.getElementById('graph-filter')?.addEventListener('change', e => this._graph?.applyFilter(e.target.value))
         this._graphLoaded = true
     }
 
-    // ========================================
-    // TABS
-    // ========================================
-    setupTabs() {
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
-        });
-    }
-
-    switchTab(tabName) {
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.tab === tabName);
-        });
-        document.querySelectorAll('.tab-content').forEach(content => {
-            content.classList.toggle('active', content.id === `${tabName}-tab`);
-        });
-        localStorage.setItem('activeTab', tabName);
-        this.currentTab = tabName;
-
-        if (tabName === 'security' && this._securityManager) {
-            this._securityManager.render();
-        }
-        if (tabName === 'graph') {
-            this.initGraph();
-            if (this._graph) this._graph.restart();
-        } else if (this._graph) {
-            this._graph.stop();
-        }
-    }
-
-    setupSidebar() {
-        const toggle = document.getElementById('sidebar-toggle');
-        const sidebar = document.getElementById('sidebar');
-        toggle?.addEventListener('click', () => sidebar.classList.toggle('open'));
-    }
-
-    // ========================================
-    // CHAT
-    // ========================================
-    setupChat() {
-        this.messages = document.getElementById('messages');
-        this.input = document.getElementById('message-input');
-        this.sendBtn = document.getElementById('send-btn');
-        this.welcome = document.getElementById('welcome');
-
-        this.input?.addEventListener('input', () => {
-            this.input.style.height = 'auto';
-            this.input.style.height = this.input.scrollHeight + 'px';
-        });
-
-        this.input?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.sendMessage();
-            }
-        });
-
-        this.sendBtn?.addEventListener('click', () => this.sendMessage());
-
-        document.getElementById('new-chat-btn')?.addEventListener('click', () => this.newChat());
-
-        document.querySelectorAll('.suggestion').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this.input.value = btn.dataset.query;
-                this.sendMessage();
-            });
-        });
-    }
-
-    newChat() {
-        this.sessionId = this.generateSessionId();
-        this.messages.innerHTML = '';
-        if (this.welcome) this.welcome.style.display = '';
-        this.input.value = '';
-        this.input.style.height = 'auto';
-    }
-
-    hideWelcome() {
-        if (this.welcome) this.welcome.style.display = 'none';
-    }
-
-    async sendMessage() {
-        const text = this.input.value.trim();
-        if (!text) return;
-
-        this.hideWelcome();
-        this.addMessage('user', text);
-        this.input.value = '';
-        this.input.style.height = 'auto';
-        this.input.disabled = true;
-        this.sendBtn.disabled = true;
-
-        const typingId = this.addTyping();
-
-        try {
-            const response = await this.authedFetch('/api/chat', {
-                method: 'POST',
-                body: JSON.stringify({ message: text, sessionId: this.sessionId })
-            });
-
-            const data = await response.json();
-            this.removeTyping(typingId);
-
-            if (data.success) {
-                this.addAssistantMessage(data);
-                this.loadSessions();
-            } else {
-                this.addMessage('assistant', data.response || data.error || 'An error occurred.');
-            }
-        } catch (error) {
-            this.removeTyping(typingId);
-            if (error.message !== 'Unauthorized') {
-                this.addMessage('assistant', 'Failed to connect to server. Please try again.');
-            }
-        } finally {
-            this.input.disabled = false;
-            this.sendBtn.disabled = false;
-            this.input.focus();
-        }
-    }
-
-    addMessage(role, content) {
-        const el = document.createElement('div');
-        el.className = `message ${role}`;
-        const label = role === 'user' ? 'You' : 'OSINT Assistant';
-        el.innerHTML = `
-            <div class="message-content">
-                <div class="message-role"><span class="message-role-dot"></span>${label}</div>
-                <div class="message-text">${this.escapeHtml(content)}</div>
-            </div>`;
-        this.messages.appendChild(el);
-        this.scrollToBottom();
-        return el;
-    }
-
-    addAssistantMessage(data) {
-        const el = document.createElement('div');
-        el.className = 'message assistant';
-
-        let inner = `<div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
-                     <div class="message-text">${this.escapeHtml(data.response)}</div>`;
-
-        if (data.chart && data.data && data.data.length > 0) {
-            const chartId = 'chart-' + Date.now();
-            inner += `<div class="message-chart"><canvas id="${chartId}"></canvas></div>`;
-            setTimeout(() => this.createChart(chartId, data.chart, data.data), 100);
-        } else if (data.data && data.data.length > 0 && data.data.length <= 25 && !data.chart) {
-            inner += this.createDataTable(data.data);
-        }
-
-        if (data.sql) {
-            const sqlId = 'sql-' + Date.now();
-            inner += `
-                <button class="sql-toggle" onclick="document.getElementById('${sqlId}').classList.toggle('visible')">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="16 18 22 12 16 6"></polyline>
-                        <polyline points="8 6 2 12 8 18"></polyline>
-                    </svg>
-                    View SQL
-                </button>
-                <div class="sql-code" id="${sqlId}">${this.escapeHtml(data.sql)}</div>`;
-        }
-
-        if (data.provider) {
-            inner += `<span class="provider-badge">via ${data.provider}${data.model ? ' · ' + data.model : ''}</span>`;
-        }
-
-        el.innerHTML = `<div class="message-content">${inner}</div>`;
-        this.messages.appendChild(el);
-        this.scrollToBottom();
-    }
-
-    createDataTable(data) {
-        if (!data || data.length === 0) return '';
-        const cols = Object.keys(data[0]);
-        let html = '<div class="message-table"><table><thead><tr>';
-        cols.forEach(c => { html += `<th>${this.escapeHtml(c)}</th>`; });
-        html += '</tr></thead><tbody>';
-        data.slice(0, 25).forEach(row => {
-            html += '<tr>';
-            cols.forEach(c => { html += `<td>${this.escapeHtml(String(row[c] ?? ''))}</td>`; });
-            html += '</tr>';
-        });
-        html += '</tbody></table></div>';
-        return html;
-    }
-
-    createChart(canvasId, chartConfig, data) {
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        const { type, labelColumn, dataColumns } = chartConfig;
-
-        const labels = data.map(r => r[labelColumn]);
-        const datasets = dataColumns.map((col, i) => ({
-            label: col,
-            data: data.map(r => r[col]),
-            backgroundColor: this.getChartColors(type, data.length, i),
-            borderColor: type === 'line' ? this.getLineColor(i) : undefined,
-            borderWidth: type === 'line' ? 2 : 1,
-            borderRadius: type === 'bar' ? 4 : 0
-        }));
-
-        this.charts[canvasId] = new Chart(ctx, {
-            type: (type === 'pie' || type === 'doughnut') ? type : (type === 'line' ? 'line' : 'bar'),
-            data: { labels, datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                plugins: {
-                    legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 16 } }
-                },
-                scales: (type !== 'pie' && type !== 'doughnut') ? {
-                    y: { beginAtZero: true, grid: { color: '#f0f1f5' } },
-                    x: { grid: { display: false } }
-                } : undefined
-            }
-        });
-    }
-
-    getChartColors(type, count, idx) {
-        const palette = ['#5b5ef4','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#06b6d4','#84cc16'];
-        return (type === 'pie' || type === 'doughnut')
-            ? palette.slice(0, count)
-            : palette[idx % palette.length];
-    }
-
-    getLineColor(idx) {
-        return ['#5b5ef4','#10b981','#f59e0b','#ef4444','#8b5cf6'][idx % 5];
-    }
-
-    addTyping() {
-        const id = 'typing-' + Date.now();
-        const el = document.createElement('div');
-        el.id = id;
-        el.className = 'message assistant';
-        el.innerHTML = `
-            <div class="message-content">
-                <div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
-                <div class="typing">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                </div>
-            </div>`;
-        this.messages.appendChild(el);
-        this.scrollToBottom();
-        return id;
-    }
-
-    removeTyping(id) { document.getElementById(id)?.remove(); }
-
-    scrollToBottom() {
-        if (this.messages) this.messages.scrollTop = this.messages.scrollHeight;
-    }
-
-    // ========================================
-    // SQL EDITOR
-    // ========================================
-    setupSQLEditor() {
-        this.sqlEditor = document.getElementById('sql-editor');
-        this.lineNumbers = document.getElementById('line-numbers');
-        this.runSQLBtn = document.getElementById('run-sql-btn');
-        this.clearSQLBtn = document.getElementById('clear-sql-btn');
-        this.sqlResults = document.getElementById('sql-results');
-
-        this.sqlEditor?.addEventListener('input', () => this.updateLineNumbers());
-        this.sqlEditor?.addEventListener('scroll', () => this.syncScroll());
-        this.runSQLBtn?.addEventListener('click', () => this.executeSQL());
-
-        this.sqlEditor?.addEventListener('keydown', (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault();
-                this.executeSQL();
-            }
-        });
-
-        this.clearSQLBtn?.addEventListener('click', () => {
-            this.sqlEditor.value = '';
-            this.updateLineNumbers();
-            this.resetResultsPlaceholder();
-        });
-
-        this.updateLineNumbers();
-    }
-
-    resetResultsPlaceholder() {
-        this.sqlResults.innerHTML = `
-            <div class="results-placeholder">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-                </svg>
-                <p>Run a query to see results</p>
-                <p class="results-hint">Ctrl+Enter to execute</p>
-            </div>`;
-    }
-
-    updateLineNumbers() {
-        if (!this.sqlEditor || !this.lineNumbers) return;
-        const lines = this.sqlEditor.value.split('\n').length;
-        this.lineNumbers.innerHTML = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
-    }
-
-    syncScroll() {
-        if (this.lineNumbers) this.lineNumbers.scrollTop = this.sqlEditor.scrollTop;
-    }
-
-    async executeSQL() {
-        const sql = this.sqlEditor?.value.trim();
-        if (!sql) return;
-
-        this.runSQLBtn.disabled = true;
-        this.runSQLBtn.innerHTML = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="animation:spin 1s linear infinite">
-                <path d="M12 2a10 10 0 1 0 10 10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
-            </svg> Running…`;
-
-        try {
-            const response = await this.authedFetch('/api/sql/execute', {
-                method: 'POST',
-                body: JSON.stringify({ sql })
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                this.displaySQLResults(data.results, data.executionTime);
-            } else {
-                this.displaySQLError(data.error);
-            }
-        } catch (error) {
-            if (error.message !== 'Unauthorized') {
-                this.displaySQLError('Failed to execute query: ' + error.message);
-            }
-        } finally {
-            this.runSQLBtn.disabled = false;
-            this.runSQLBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run Query`;
-        }
-    }
-
-    displaySQLResults(results, executionTime) {
-        if (!results || results.length === 0) {
-            this.sqlResults.innerHTML = `
-                <div class="results-header">
-                    <div class="results-info">Returned <strong>0 rows</strong>${executionTime ? ` in ${executionTime}ms` : ''}</div>
-                </div>
-                <div class="results-placeholder" style="height:auto;padding:32px">
-                    <p>Query returned no results</p>
-                </div>`;
-            return;
-        }
-
-        const cols = Object.keys(results[0]);
-        let html = `
-            <div class="results-header">
-                <div class="results-info">Returned <strong>${results.length} row${results.length !== 1 ? 's' : ''}</strong>${executionTime ? ` in ${executionTime}ms` : ''}</div>
-            </div>
-            <div class="results-table-wrapper">
-                <table class="results-table">
-                    <thead><tr>${cols.map(c => `<th>${this.escapeHtml(c)}</th>`).join('')}</tr></thead>
-                    <tbody>`;
-
-        results.forEach(row => {
-            html += '<tr>' + cols.map(c => {
-                const v = row[c] !== null && row[c] !== undefined ? String(row[c]) : '';
-                return `<td>${this.escapeHtml(v)}</td>`;
-            }).join('') + '</tr>';
-        });
-
-        html += '</tbody></table></div>';
-        this.sqlResults.innerHTML = html;
-    }
-
-    displaySQLError(error) {
-        this.sqlResults.innerHTML = `<div class="error-message"><strong>Error:</strong><br>${this.escapeHtml(error)}</div>`;
-    }
-
-    escapeHtml(text) {
-        const d = document.createElement('div');
-        d.textContent = text;
-        return d.innerHTML;
+    // ── Utility ──────────────────────────────────────────────────
+    _esc(text) {
+        const d = document.createElement('div')
+        d.textContent = String(text ?? '')
+        return d.innerHTML
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => { new TabManager(); });
+// ── Compat shims for SecurityManager (uses old method names) ─────
+TabManager.prototype.authedFetch  = function(url, opts) { return this._fetch(url, opts) }
+TabManager.prototype.getAuthHeaders = function() { return this._headers() }
+TabManager.prototype.escapeHtml   = function(t) { return this._esc(t) }
+
+document.addEventListener('DOMContentLoaded', () => { new TabManager() })

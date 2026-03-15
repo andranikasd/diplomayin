@@ -1,403 +1,236 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Armenian OSINT Analytics — Sign In</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --accent: #5b5ef4;
-            --accent-hover: #4a4de0;
-            --bg: #f8f9fc;
-            --card: #ffffff;
-            --border: #e2e5ef;
-            --text: #111827;
-            --muted: #6b7280;
-            --error: #ef4444;
-            --success: #10b981;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 24px;
-        }
-
-        .auth-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 40px;
-            width: 100%;
-            max-width: 420px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.06);
-        }
-
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 32px;
-        }
-
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: var(--accent);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 700;
-            font-size: 16px;
-        }
-
-        .logo-text {
-            font-size: 15px;
-            font-weight: 600;
-            color: var(--text);
-            line-height: 1.2;
-        }
-
-        .logo-sub {
-            font-size: 11px;
-            color: var(--muted);
-            font-weight: 400;
-        }
-
-        h2 {
-            font-size: 22px;
-            font-weight: 700;
-            color: var(--text);
-            margin-bottom: 6px;
-        }
-
-        .subtitle {
-            font-size: 14px;
-            color: var(--muted);
-            margin-bottom: 28px;
-        }
-
-        .tabs {
-            display: flex;
-            background: var(--bg);
-            border-radius: 8px;
-            padding: 4px;
-            margin-bottom: 24px;
-        }
-
-        .tab {
-            flex: 1;
-            padding: 8px;
-            text-align: center;
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--muted);
-            cursor: pointer;
-            border-radius: 6px;
-            transition: all 0.2s;
-            border: none;
-            background: none;
-        }
-
-        .tab.active {
-            background: white;
-            color: var(--text);
-            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-        }
-
-        .form-group {
-            margin-bottom: 16px;
-        }
-
-        label {
-            display: block;
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--text);
-            margin-bottom: 6px;
-        }
-
-        input {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1.5px solid var(--border);
-            border-radius: 8px;
-            font-size: 14px;
-            font-family: inherit;
-            color: var(--text);
-            background: white;
-            transition: border-color 0.2s;
-            outline: none;
-        }
-
-        input:focus {
-            border-color: var(--accent);
-        }
-
-        input::placeholder { color: var(--muted); }
-
-        .btn {
-            width: 100%;
-            padding: 11px;
-            background: var(--accent);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            font-family: inherit;
-            transition: background 0.2s;
-            margin-top: 8px;
-        }
-
-        .btn:hover { background: var(--accent-hover); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .alert {
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 13px;
-            margin-bottom: 16px;
-            display: none;
-        }
-
-        .alert.error { background: #fef2f2; color: var(--error); border: 1px solid #fecaca; }
-        .alert.success { background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; }
-        .alert.visible { display: block; }
-
-        .form-panel { display: none; }
-        .form-panel.active { display: block; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in — Armenian OSINT Analytics</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/styles.css">
 </head>
-<body>
-    <div class="auth-card">
-        <div class="logo">
-            <div class="logo-icon">AM</div>
-            <div>
-                <div class="logo-text">Armenian OSINT</div>
-                <div class="logo-sub">Analytics Platform</div>
-            </div>
-        </div>
-
-        <h2 id="form-title">Welcome back</h2>
-        <p class="subtitle" id="form-subtitle">Sign in to your account to continue</p>
-
-        <div class="tabs">
-            <button class="tab active" id="tab-login" onclick="switchTab('login')">Sign In</button>
-            <button class="tab" id="tab-register" onclick="switchTab('register')">Create Account</button>
-        </div>
-
-        <div class="alert" id="alert"></div>
-
-        <!-- Login Form -->
-        <div class="form-panel active" id="panel-login">
-            <div class="form-group">
-                <label for="login-email">Email address</label>
-                <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email">
-            </div>
-            <div class="form-group">
-                <label for="login-password">Password</label>
-                <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
-            </div>
-            <button class="btn" id="login-btn" onclick="handleLogin()">Sign In</button>
-        </div>
-
-        <!-- 2FA Form -->
-        <div class="form-panel" id="panel-totp">
-            <div style="text-align:center;margin-bottom:20px">
-                <div style="width:48px;height:48px;background:#eef2ff;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-                </div>
-                <p style="font-size:13px;color:#6b7280">Enter the 6-digit code from your authenticator app</p>
-            </div>
-            <div class="form-group">
-                <label for="totp-code">Authenticator Code</label>
-                <input type="text" id="totp-code" placeholder="000000" maxlength="6" autocomplete="one-time-code" style="letter-spacing:0.2em;text-align:center;font-size:20px;">
-            </div>
-            <button class="btn" id="totp-btn" onclick="handleTOTP()">Verify</button>
-            <button onclick="cancelTOTP()" style="width:100%;background:none;border:none;color:#6b7280;font-size:13px;cursor:pointer;margin-top:12px;font-family:inherit;">← Back to login</button>
-        </div>
-
-        <!-- Register Form -->
-        <div class="form-panel" id="panel-register">
-            <div class="form-group">
-                <label for="reg-name">Full name</label>
-                <input type="text" id="reg-name" placeholder="Your name" autocomplete="name">
-            </div>
-            <div class="form-group">
-                <label for="reg-email">Email address</label>
-                <input type="email" id="reg-email" placeholder="you@example.com" autocomplete="email">
-            </div>
-            <div class="form-group">
-                <label for="reg-password">Password <span style="color:var(--muted);font-weight:400">(min 6 chars)</span></label>
-                <input type="password" id="reg-password" placeholder="••••••••" autocomplete="new-password">
-            </div>
-            <button class="btn" id="register-btn" onclick="handleRegister()">Create Account</button>
-        </div>
+<body style="overflow:auto">
+<div class="auth-page">
+  <div class="auth-wrapper">
+    <div class="auth-logo">
+      <div class="auth-logo-icon">AM</div>
+      <div class="auth-logo-text">
+        <h1>Armenian OSINT</h1>
+        <p>Analytics Platform</p>
+      </div>
     </div>
+    <div class="auth-card" id="auth-card">
 
-    <script>
-        if (localStorage.getItem('auth_token')) { window.location.href = '/'; }
-        let _partialToken = null;
+      <!-- Login Panel -->
+      <div id="panel-login">
+        <div class="auth-tabs">
+          <button class="auth-tab-btn active" onclick="showPanel('login')">Sign In</button>
+          <button class="auth-tab-btn" onclick="showPanel('register')">Register</button>
+        </div>
+        <h2 class="auth-heading">Welcome back</h2>
+        <p class="auth-subheading">Sign in to your analytics account</p>
+        <div id="login-alert" style="display:none;margin-bottom:14px"></div>
+        <button class="btn-google" onclick="handleGoogleSSO()">
+          <svg class="google-icon" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          Continue with Google
+        </button>
+        <div class="auth-divider">or continue with email</div>
+        <form class="auth-form" onsubmit="handleLogin(event)">
+          <div>
+            <label for="login-email">Email address</label>
+            <input id="login-email" type="email" placeholder="you@example.com" required autocomplete="email">
+          </div>
+          <div>
+            <label for="login-password">Password</label>
+            <input id="login-password" type="password" placeholder="Enter your password" required autocomplete="current-password">
+          </div>
+          <button type="submit" class="btn-auth" id="login-btn">Sign In</button>
+        </form>
+        <div class="auth-switch">
+          No account? <button onclick="showPanel('register')">Create one free</button>
+        </div>
+      </div>
 
-        function switchTab(tab) {
-            document.getElementById('tab-login').classList.toggle('active', tab === 'login');
-            document.getElementById('tab-register').classList.toggle('active', tab === 'register');
-            document.getElementById('panel-login').classList.toggle('active', tab === 'login');
-            document.getElementById('panel-register').classList.toggle('active', tab === 'register');
-            document.getElementById('form-title').textContent = tab === 'login' ? 'Welcome back' : 'Create account';
-            document.getElementById('form-subtitle').textContent = tab === 'login'
-                ? 'Sign in to your account to continue'
-                : 'Start analyzing Armenian market data';
-            clearAlert();
-        }
+      <!-- Register Panel -->
+      <div id="panel-register" style="display:none">
+        <div class="auth-tabs">
+          <button class="auth-tab-btn" onclick="showPanel('login')">Sign In</button>
+          <button class="auth-tab-btn active" onclick="showPanel('register')">Register</button>
+        </div>
+        <h2 class="auth-heading">Create account</h2>
+        <p class="auth-subheading">Get access to Armenian market intelligence</p>
+        <div id="register-alert" style="display:none;margin-bottom:14px"></div>
+        <form class="auth-form" onsubmit="handleRegister(event)">
+          <div>
+            <label for="reg-name">Full name</label>
+            <input id="reg-name" type="text" placeholder="Armen Petrosyan" required autocomplete="name">
+          </div>
+          <div>
+            <label for="reg-email">Email address</label>
+            <input id="reg-email" type="email" placeholder="you@example.com" required autocomplete="email">
+          </div>
+          <div>
+            <label for="reg-password">Password <span style="color:var(--text-3);font-weight:400">(min 6 chars)</span></label>
+            <input id="reg-password" type="password" placeholder="Choose a password" required minlength="6" autocomplete="new-password">
+          </div>
+          <button type="submit" class="btn-auth" id="register-btn">Create Account</button>
+        </form>
+        <div class="auth-switch">
+          Have an account? <button onclick="showPanel('login')">Sign in</button>
+        </div>
+      </div>
 
-        function showAlert(msg, type) {
-            const el = document.getElementById('alert');
-            el.textContent = msg;
-            el.className = `alert ${type} visible`;
-        }
+      <!-- 2FA Panel -->
+      <div id="panel-totp" style="display:none">
+        <div class="back-link" onclick="showPanel('login')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
+          </svg>
+          Back to login
+        </div>
+        <div style="text-align:center;margin-bottom:22px">
+          <div style="width:52px;height:52px;border-radius:14px;background:var(--accent-dim);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:24px">🔐</div>
+          <h2 class="auth-heading">Two-factor auth</h2>
+          <p class="auth-subheading">Enter the 6-digit code from your authenticator app</p>
+        </div>
+        <div id="totp-alert" style="display:none;margin-bottom:14px"></div>
+        <input type="text" id="totp-code" class="otp-input" placeholder="000000" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code">
+        <button class="btn-auth" id="totp-btn" onclick="handleTOTP()" style="margin-top:14px">Verify Code</button>
+      </div>
 
-        function clearAlert() {
-            document.getElementById('alert').className = 'alert';
-        }
+    </div>
+  </div>
+</div>
 
-        function setLoading(btnId, loading) {
-            const btn = document.getElementById(btnId);
-            btn.disabled = loading;
-            btn.textContent = loading
-                ? (btnId === 'login-btn' ? 'Signing in…' : 'Creating account…')
-                : (btnId === 'login-btn' ? 'Sign In' : 'Create Account');
-        }
+<script>
+let _partialToken = null
 
-        async function handleLogin() {
-            const email = document.getElementById('login-email').value.trim();
-            const password = document.getElementById('login-password').value;
-            if (!email || !password) return showAlert('Please fill in all fields.', 'error');
+// Already logged in?
+if (localStorage.getItem('auth_token')) window.location.href = '/'
 
-            setLoading('login-btn', true);
-            clearAlert();
+// Handle OAuth redirect token
+;(function() {
+  const p = new URLSearchParams(window.location.search)
+  const token = p.get('token'), error = p.get('error')
+  if (token) {
+    localStorage.setItem('auth_token', token)
+    window.history.replaceState({}, '', '/login')
+    window.location.href = '/'
+  } else if (error) {
+    showAlert('login', 'error', decodeURIComponent(error))
+  }
+})()
 
-            try {
-                const res = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                const data = await res.json();
+function showPanel(name) {
+  document.getElementById('panel-login').style.display    = name === 'login'    ? '' : 'none'
+  document.getElementById('panel-register').style.display = name === 'register' ? '' : 'none'
+  document.getElementById('panel-totp').style.display     = name === 'totp'     ? '' : 'none'
+}
 
-                if (data.success && data.requires_2fa) {
-                    _partialToken = data.partial_token;
-                    show2FA();
-                } else if (data.success) {
-                    localStorage.setItem('auth_token', data.token);
-                    localStorage.setItem('auth_user', JSON.stringify(data.user));
-                    window.location.href = '/';
-                } else {
-                    showAlert(data.error || 'Login failed', 'error');
-                }
-            } catch {
-                showAlert('Connection error. Please try again.', 'error');
-            } finally {
-                setLoading('login-btn', false);
-            }
-        }
+function showAlert(panel, type, msg) {
+  const el = document.getElementById(panel + '-alert')
+  if (!el) return
+  el.className = 'auth-alert ' + type
+  el.textContent = msg
+  el.style.display = 'block'
+}
+function clearAlert(p) {
+  const el = document.getElementById(p + '-alert')
+  if (el) el.style.display = 'none'
+}
 
-        async function handleRegister() {
-            const full_name = document.getElementById('reg-name').value.trim();
-            const email = document.getElementById('reg-email').value.trim();
-            const password = document.getElementById('reg-password').value;
-            if (!email || !password) return showAlert('Email and password are required.', 'error');
+async function handleLogin(e) {
+  e.preventDefault()
+  clearAlert('login')
+  const btn   = document.getElementById('login-btn')
+  const email = document.getElementById('login-email').value.trim()
+  const pass  = document.getElementById('login-password').value
+  btn.disabled = true; btn.textContent = 'Signing in…'
+  try {
+    const res  = await fetch('/api/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email, password:pass}) })
+    const data = await res.json()
+    if (data.requires_2fa) {
+      _partialToken = data.partial_token
+      showPanel('totp')
+      setTimeout(() => { const c=document.getElementById('totp-code'); c&&c.focus() }, 100)
+      return
+    }
+    if (data.success && data.token) {
+      localStorage.setItem('auth_token', data.token)
+      if (data.user) localStorage.setItem('auth_user', JSON.stringify(data.user))
+      window.location.href = '/'
+    } else {
+      showAlert('login', 'error', data.error || 'Login failed. Check your credentials.')
+    }
+  } catch { showAlert('login', 'error', 'Connection failed. Make sure the server is running.') }
+  finally { btn.disabled = false; btn.textContent = 'Sign In' }
+}
 
-            setLoading('register-btn', true);
-            clearAlert();
+async function handleRegister(e) {
+  e.preventDefault()
+  clearAlert('register')
+  const btn  = document.getElementById('register-btn')
+  const name = document.getElementById('reg-name').value.trim()
+  const email= document.getElementById('reg-email').value.trim()
+  const pass = document.getElementById('reg-password').value
+  btn.disabled = true; btn.textContent = 'Creating account…'
+  try {
+    const res  = await fetch('/api/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({full_name:name, email, password:pass}) })
+    const data = await res.json()
+    if (data.success && data.token) {
+      localStorage.setItem('auth_token', data.token)
+      if (data.user) localStorage.setItem('auth_user', JSON.stringify(data.user))
+      window.location.href = '/'
+    } else {
+      showAlert('register', 'error', data.error || 'Registration failed.')
+    }
+  } catch { showAlert('register', 'error', 'Connection failed.') }
+  finally { btn.disabled = false; btn.textContent = 'Create Account' }
+}
 
-            try {
-                const res = await fetch('/api/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password, full_name })
-                });
-                const data = await res.json();
+async function handleTOTP() {
+  const code = document.getElementById('totp-code').value.trim()
+  if (code.length !== 6) { showAlert('totp','error','Enter a 6-digit code.'); return }
+  clearAlert('totp')
+  const btn = document.getElementById('totp-btn')
+  btn.disabled = true; btn.textContent = 'Verifying…'
+  try {
+    const res  = await fetch('/api/auth/2fa/validate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({partial_token:_partialToken, code}) })
+    const data = await res.json()
+    if (data.success && data.token) {
+      localStorage.setItem('auth_token', data.token)
+      if (data.user) localStorage.setItem('auth_user', JSON.stringify(data.user))
+      window.location.href = '/'
+    } else {
+      showAlert('totp','error', data.error || 'Invalid code. Try again.')
+      document.getElementById('totp-code').value = ''
+      document.getElementById('totp-code').focus()
+    }
+  } catch { showAlert('totp','error','Connection failed.') }
+  finally { btn.disabled = false; btn.textContent = 'Verify Code' }
+}
 
-                if (data.success) {
-                    localStorage.setItem('auth_token', data.token);
-                    localStorage.setItem('auth_user', JSON.stringify(data.user));
-                    window.location.href = '/';
-                } else {
-                    showAlert(data.error || 'Registration failed', 'error');
-                }
-            } catch {
-                showAlert('Connection error. Please try again.', 'error');
-            } finally {
-                setLoading('register-btn', false);
-            }
-        }
+function handleGoogleSSO() {
+  window.location.href = '/api/auth/google'
+}
 
-        function show2FA() {
-            ['panel-login','panel-register'].forEach(id => document.getElementById(id).classList.remove('active'));
-            document.getElementById('panel-totp').classList.add('active');
-            document.getElementById('tab-login').style.display = 'none';
-            document.getElementById('tab-register').style.display = 'none';
-            document.getElementById('form-title').textContent = 'Two-Factor Auth';
-            document.getElementById('form-subtitle').textContent = 'Enter the code from your authenticator app';
-            clearAlert();
-            setTimeout(() => document.getElementById('totp-code').focus(), 100);
-        }
-
-        function cancelTOTP() {
-            _partialToken = null;
-            document.getElementById('totp-code').value = '';
-            document.getElementById('panel-totp').classList.remove('active');
-            document.getElementById('panel-login').classList.add('active');
-            document.getElementById('tab-login').style.display = '';
-            document.getElementById('tab-register').style.display = '';
-            switchTab('login');
-        }
-
-        async function handleTOTP() {
-            const code = document.getElementById('totp-code').value.trim();
-            if (code.length !== 6) return showAlert('Enter your 6-digit code.', 'error');
-            const btn = document.getElementById('totp-btn');
-            btn.disabled = true; btn.textContent = 'Verifying…'; clearAlert();
-            try {
-                const res = await fetch('/api/auth/2fa/validate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ partial_token: _partialToken, code })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    localStorage.setItem('auth_token', data.token);
-                    localStorage.setItem('auth_user', JSON.stringify(data.user));
-                    window.location.href = '/';
-                } else {
-                    showAlert(data.error || 'Invalid code', 'error');
-                }
-            } catch { showAlert('Connection error.', 'error'); }
-            finally { btn.disabled = false; btn.textContent = 'Verify'; }
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            const totpActive = document.getElementById('panel-totp').classList.contains('active');
-            const loginActive = document.getElementById('panel-login').classList.contains('active');
-            if (totpActive) handleTOTP();
-            else if (loginActive) handleLogin();
-            else handleRegister();
-        });
-    </script>
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return
+  const totp = document.getElementById('panel-totp')
+  if (totp && totp.style.display !== 'none') handleTOTP()
+})
+document.addEventListener('input', e => {
+  if (e.target.id === 'totp-code' && e.target.value.replace(/\D/g,'').length === 6) {
+    e.target.value = e.target.value.replace(/\D/g,'')
+    handleTOTP()
+  }
+})
+</script>
 </body>
 </html>
