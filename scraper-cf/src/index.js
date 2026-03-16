@@ -210,10 +210,11 @@ function guessCategory(text = '') {
 }
 
 // ─── Scraper job tracking ─────────────────────────────────────────
+// Column names match 0001_schema.sql: job_type, source_name, error_message, completed_at
 async function startJob(DB, source) {
     try {
         const r = await DB.prepare(
-            "INSERT INTO scraper_jobs (source, status, started_at) VALUES (?, 'running', CURRENT_TIMESTAMP) RETURNING id"
+            "INSERT INTO scraper_jobs (job_type, source_name, status, started_at) VALUES ('scrape', ?, 'running', CURRENT_TIMESTAMP) RETURNING id"
         ).bind(source).first()
         return r?.id ?? null
     } catch { return null }
@@ -222,7 +223,7 @@ async function finishJob(DB, id, status, count, errMsg = null) {
     if (!id) return
     try {
         await DB.prepare(
-            'UPDATE scraper_jobs SET status=?, items_scraped=?, error_msg=?, finished_at=CURRENT_TIMESTAMP WHERE id=?'
+            'UPDATE scraper_jobs SET status=?, items_scraped=?, error_message=?, completed_at=CURRENT_TIMESTAMP WHERE id=?'
         ).bind(status, count, errMsg, id).run()
     } catch { /* non-fatal */ }
 }

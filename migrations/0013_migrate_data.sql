@@ -13,11 +13,11 @@ INSERT OR IGNORE INTO data_points
 SELECT
   LOWER(COALESCE(category, 'economy')),  -- domain
   NULL,                                   -- category (no subcategory in old table)
-  COALESCE(region, 'Armenia'),            -- entity (region is the subject)
+  'Armenia',                              -- entity: national-level stat subject is always Armenia
   indicator,                              -- attribute
   CAST(value AS REAL),                    -- value_num
   unit,                                   -- unit
-  COALESCE(region, 'Armenia'),            -- location
+  COALESCE(region, 'Armenia'),            -- location: region if present, else Armenia
   COALESCE(period, ''),                   -- period
   COALESCE(source, ''),                   -- source_name
   COALESCE(confidence, 'medium'),         -- confidence

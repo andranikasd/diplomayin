@@ -162,6 +162,13 @@ async function audit(DB, { userId, action, ip, ua, metadata, severity = 'info' }
         ).bind(userId ?? null, action, ip ?? null, ua ?? null, metadata ? JSON.stringify(metadata) : null, severity).run()
     } catch { /* non-fatal */ }
 }
+async function appLog(DB, { level = 'info', source = 'api', message, metadata, userId = null }) {
+    try {
+        await DB.prepare(
+            'INSERT INTO app_logs (level, source, message, metadata, user_id) VALUES (?,?,?,?,?)'
+        ).bind(level, source, message, metadata ? JSON.stringify(metadata) : null, userId ?? null).run()
+    } catch { /* non-fatal */ }
+}
 
 // ─────────────────────────────────────────────────────────────
 // RATE LIMITING
@@ -449,7 +456,7 @@ async function storeDataPoints(DB, domain, category, rows, sourceName, sourceUrl
                 row.period || String(new Date().getFullYear()),
                 row.source_name || sourceName || '',
                 sourceUrl || null,
-                ['high','medium','low'].includes(row.confidence) ? row.confidence : 'medium',
+                ['high','medium','low','ai_inferred'].includes(row.confidence) ? row.confidence : 'medium',
             ).run()
             if (r.meta?.changes > 0) count++
         } catch { /* duplicate */ }
@@ -480,6 +487,51 @@ async function researchQuestion(question, DB, openaiKey, braveKey) {
 
     return { rows: extracted.rows, fromCache: false, domain: extracted.domain, category: extracted.category }
 }
+
+// Generate answer + structured rows directly from AI knowledge (last-resort fallback)
+async function aiGenerateFromKnowledge(question, apiKey) {
+    const system = `You are an Armenian market intelligence expert with deep knowledge of Armenia's economy, demographics, businesses, society, politics, and geography.
+The user's question could not be answered from the database or web research. Use your own knowledge to answer it.
+
+Return ONLY valid JSON:
+{
+  "answer": "A clear, factual 2-5 sentence answer based on your knowledge. Be specific with numbers/dates where you know them.",
+  "domain": "one of: demographics|economy|business|health|environment|labor|education|technology|banking|social|politics|geography|general",
+  "category": "sub-topic slug e.g. cigarette_brands or gdp_growth",
+  "rows": [
+    { "entity": "subject name", "attribute": "metric name", "value_text": "text value", "value_num": null, "unit": "", "location": "Armenia", "period": "2024", "confidence": "ai_inferred" }
+  ],
+  "not_found": false
+}
+
+Rules:
+- If you genuinely do not know, set not_found=true and give a short honest answer
+- rows[] should capture any specific facts/figures from your answer as structured data (can be empty [])
+- value_num: use a number if the value is numeric, else null
+- confidence MUST be "ai_inferred" for every row
+- period: best-known year/range; use current year if unclear
+- ONLY return valid JSON, no markdown`
+
+    try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: system },
+                    { role: 'user', content: question },
+                ],
+                max_tokens: 800, temperature: 0.3,
+            }),
+        })
+        const data = await res.json()
+        const raw = data.choices?.[0]?.message?.content?.trim() || '{}'
+        const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '').trim()
+        return JSON.parse(cleaned)
+    } catch (e) { console.error('aiGenerateFromKnowledge:', e.message); return { not_found: true } }
+}
+
 
 // ─────────────────────────────────────────────────────────────
 // 3-STEP AI PIPELINE
@@ -525,7 +577,11 @@ Return ONLY the SQL or ONLY the string NEEDS_RESEARCH — no explanation, no mar
         const data = await res.json()
         const raw = data.choices?.[0]?.message?.content?.trim() || ''
         return raw.replace(/^```sql\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '').replace(/;$/, '').trim()
-    } catch (e) { console.error('aiPlan:', e.message); return 'NEEDS_RESEARCH' }
+    } catch (e) {
+        console.error('aiPlan:', e.message)
+        // DB not available here — caller logs if needed
+        return 'NEEDS_RESEARCH'
+    }
 }
 
 async function aiInterpret(question, sql, results, apiKey, note = '') {
@@ -775,14 +831,15 @@ app.post('/chat', (c) => requireAuth(c, async () => {
             // ── Step 2: AI plans — returns SQL or NEEDS_RESEARCH ─
             const plan = await aiPlan(message, schema, OPENAI_API_KEY)
 
-            if (plan === 'NEEDS_RESEARCH') {
-                // ── Step 3a: Research is required ────────────────
+            if (!isSafeSQL(plan)) {
+                // ── Step 3a: Research required (NEEDS_RESEARCH, empty plan, or invalid SQL) ─
                 if (BRAVE_API_KEY) {
                     try {
                         const res = await researchQuestion(message, DB, OPENAI_API_KEY, BRAVE_API_KEY)
                         if (res?.rows?.length) {
                             researched = true
                             researchDomain = res.domain
+                            await appLog(DB, { level: 'info', source: 'research', message: `Web research stored ${res.rows.length} rows for domain: ${res.domain}`, metadata: { question: message, domain: res.domain, rows: res.rows.length }, userId: user.id })
                             // Re-introspect now that data is stored, generate SQL
                             const freshSchema = await buildDynamicSchema(DB)
                             const freshSql = await aiPlan(message, freshSchema, OPENAI_API_KEY)
@@ -796,7 +853,10 @@ app.post('/chat', (c) => requireAuth(c, async () => {
                                 sqlSource = 'research_direct'
                             }
                         }
-                    } catch (e) { console.error('research:', e.message) }
+                    } catch (e) {
+                        console.error('research:', e.message)
+                        await appLog(DB, { level: 'error', source: 'research', message: e.message, userId: user.id })
+                    }
                 }
             } else if (isSafeSQL(plan)) {
                 // ── Step 3b: Execute AI-generated SQL ────────────
@@ -821,7 +881,10 @@ app.post('/chat', (c) => requireAuth(c, async () => {
                                 }
                                 if (!results.length) results = res.rows
                             }
-                        } catch (e) { console.error('research fallback:', e.message) }
+                        } catch (e) {
+                        console.error('research fallback:', e.message)
+                        await appLog(DB, { level: 'warn', source: 'research', message: 'Research fallback failed: ' + e.message, userId: user.id })
+                    }
                     }
                 } catch {
                     // AI SQL failed — fallback to keyword
@@ -830,7 +893,10 @@ app.post('/chat', (c) => requireAuth(c, async () => {
                     try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
                 }
             }
-        } catch (e) { console.error('AI pipeline:', e.message) }
+        } catch (e) {
+            console.error('AI pipeline:', e.message)
+            await appLog(DB, { level: 'error', source: 'ai', message: 'AI pipeline error: ' + e.message, userId: user.id })
+        }
     }
 
     // ── Keyword fallback if nothing worked ───────────────────
@@ -840,17 +906,51 @@ app.post('/chat', (c) => requireAuth(c, async () => {
         try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
     }
 
+    // ── AI knowledge fallback — always give an answer ─────────
+    let aiKnowledgeAnswer = null
+    if (!results.length && OPENAI_API_KEY) {
+        try {
+            const generated = await aiGenerateFromKnowledge(message, OPENAI_API_KEY)
+            if (generated && !generated.not_found) {
+                aiKnowledgeAnswer = generated.answer || null
+                if (generated.rows?.length) {
+                    await storeDataPoints(DB, generated.domain, generated.category, generated.rows, 'AI Knowledge Base', null)
+                    results = generated.rows
+                    researchDomain = generated.domain
+                    sqlSource = 'ai_knowledge'
+                    // Generate SQL now that data is in DB — so cache stores a real query for next time
+                    try {
+                        const freshSchema = await buildDynamicSchema(DB)
+                        const freshSql = await aiPlan(message, freshSchema, OPENAI_API_KEY)
+                        if (isSafeSQL(freshSql)) {
+                            const { results: freshRows } = await DB.prepare(freshSql).all()
+                            if (freshRows?.length) { results = freshRows; sql = freshSql }
+                        }
+                    } catch { /* non-fatal — use stored rows */ }
+                }
+                researched = true
+                await appLog(DB, { level: 'info', source: 'ai', message: `AI knowledge used for: "${message.slice(0, 120)}"`, metadata: { domain: generated.domain, rows: generated.rows?.length ?? 0 }, userId: user.id })
+            }
+        } catch (e) {
+            console.error('aiKnowledge:', e.message)
+            await appLog(DB, { level: 'warn', source: 'ai', message: 'AI knowledge fallback failed: ' + e.message, userId: user.id })
+        }
+    }
+
     // ── AI interprets results ────────────────────────────────
     let response = results.length
         ? `Found ${results.length} result${results.length === 1 ? '' : 's'} for your query.`
-        : 'I searched the database and the web but could not find reliable data for this topic about Armenia. Try rephrasing your question.'
+        : aiKnowledgeAnswer
+        || 'I searched the database and web but could not find reliable data for this topic about Armenia.'
 
     if (OPENAI_API_KEY && results.length) {
         try {
-            const note = researched ? '[Note: Data was fetched from the web and stored for future queries.]\n' : ''
+            const note = researched ? '[Note: Data was fetched from the web and/or generated from AI knowledge and stored for future queries.]\n' : ''
             const interpreted = await aiInterpret(message, sql || '', results, OPENAI_API_KEY, note)
             if (interpreted) response = interpreted
         } catch (e) { console.error('aiInterpret:', e.message) }
+    } else if (aiKnowledgeAnswer && !results.length) {
+        response = aiKnowledgeAnswer
     }
 
     // ── Store in query cache ─────────────────────────────────
@@ -1079,7 +1179,7 @@ app.get('/security/anomalies', (c) => requireAuth(c, async () => {
         "SELECT ip, COUNT(*) AS n FROM audit_log WHERE action='failed_login' AND created_at > ? GROUP BY ip HAVING n > 5"
     ).bind(w15m).all()
     const { results: sf } = await DB.prepare(
-        "SELECT source, error_msg, started_at FROM scraper_jobs WHERE status='failed' AND started_at > ? ORDER BY started_at DESC LIMIT 10"
+        "SELECT source_name, error_message, started_at FROM scraper_jobs WHERE status='failed' AND started_at > ? ORDER BY started_at DESC LIMIT 10"
     ).bind(w24h).all()
     const { results: sqli } = await DB.prepare(
         "SELECT user_id, metadata, created_at FROM audit_log WHERE action='sqli_attempt' AND created_at > ? ORDER BY created_at DESC"
@@ -1244,7 +1344,7 @@ app.get('/admin/stats', (c) => requireAdmin(c, async () => {
         'SELECT domain, COUNT(*) as n FROM data_points GROUP BY domain ORDER BY n DESC'
     ).all()
     const lastScrape = await DB.prepare(
-        "SELECT source, finished_at FROM scraper_jobs WHERE status='completed' ORDER BY finished_at DESC LIMIT 1"
+        "SELECT source_name, completed_at FROM scraper_jobs WHERE status='completed' ORDER BY completed_at DESC LIMIT 1"
     ).first()
     return c.json({
         success: true,
@@ -1272,6 +1372,23 @@ app.get('/admin/logs/scraper', (c) => requireAdmin(c, async () => {
     const { results } = await c.env.DB.prepare(sql).bind(...binds).all()
     return c.json({ success: true, logs: results })
 }))
+
+app.get('/admin/logs/app', (c) => requireAdmin(c, async () => {
+    const limit  = Math.min(parseInt(c.req.query('limit') || '200'), 1000)
+    const level  = c.req.query('level')
+    const source = c.req.query('source')
+    let sql = 'SELECT al.*, u.email FROM app_logs al LEFT JOIN users u ON al.user_id = u.id'
+    const binds = []
+    const where = []
+    if (level)  { where.push('al.level = ?');  binds.push(level) }
+    if (source) { where.push('al.source = ?'); binds.push(source) }
+    if (where.length) sql += ' WHERE ' + where.join(' AND ')
+    sql += ' ORDER BY al.created_at DESC LIMIT ?'
+    binds.push(limit)
+    const { results } = await c.env.DB.prepare(sql).bind(...binds).all()
+    return c.json({ success: true, logs: results })
+}))
+
 
 app.get('/admin/logs/audit', (c) => requireAdmin(c, async () => {
     const limit    = Math.min(parseInt(c.req.query('limit') || '100'), 500)

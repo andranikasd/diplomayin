@@ -217,6 +217,7 @@
         <div class="admin-tabs">
           <button class="admin-tab-btn active" data-section="overview">Overview</button>
           <button class="admin-tab-btn" data-section="scraper-logs">Scraper Logs</button>
+          <button class="admin-tab-btn" data-section="app-logs">App Logs</button>
           <button class="admin-tab-btn" data-section="audit-logs">Audit Logs</button>
           <button class="admin-tab-btn" data-section="users">User Management</button>
           <button class="admin-tab-btn" data-section="sql-editor">DB Access</button>
@@ -254,6 +255,29 @@
             </div>
           </div>
           <div id="scraper-logs-table"></div>
+        </div>
+
+        <!-- App logs section -->
+        <div class="admin-section" id="admin-section-app-logs">
+          <div class="admin-section-header">
+            <h3 class="admin-section-title">Application Logs</h3>
+            <div class="admin-section-actions">
+              <select id="app-log-level-filter" class="admin-select">
+                <option value="">All levels</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+              </select>
+              <select id="app-log-source-filter" class="admin-select">
+                <option value="">All sources</option>
+                <option value="ai">AI</option>
+                <option value="research">Research</option>
+                <option value="api">API</option>
+              </select>
+              <button class="btn-secondary" id="refresh-app-logs">Refresh</button>
+            </div>
+          </div>
+          <div id="app-logs-table"></div>
         </div>
 
         <!-- Audit logs section -->

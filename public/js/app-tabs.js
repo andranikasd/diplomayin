@@ -258,8 +258,11 @@ class TabManager {
         let inner = `<div class="message-role"><span class="message-role-dot"></span>OSINT Assistant</div>
                      <div class="message-text">${this._esc(data.response)}</div>`
 
-        if (data.data?.length && data.data.length <= 30) {
+        if (data.data?.length) {
             inner += this._renderTable(data.data)
+            if (data.data.length >= 50) {
+                inner += `<p class="table-hint">Showing ${data.data.length} rows — refine your query to narrow results.</p>`
+            }
         }
 
         if (data.sql) {
@@ -271,9 +274,13 @@ class TabManager {
                 <div class="sql-code" id="${sid}">${this._esc(data.sql)}</div>`
         }
 
-        if (data.researched) {
-            inner += `<span class="research-badge">Web researched &amp; stored</span>`
-        }
+        const srcLabel = {
+            'ai_knowledge': '🤖 AI knowledge — stored for future queries',
+            'ai_research':  '🌐 Web researched &amp; stored',
+            'research_direct': '🌐 Web researched &amp; stored',
+        }[data.sqlSource]
+        if (srcLabel) inner += `<span class="research-badge">${srcLabel}</span>`
+        else if (data.researched) inner += `<span class="research-badge">Researched &amp; stored</span>`
 
         el.innerHTML = `<div class="message-content">${inner}</div>`
         this._msgs.appendChild(el)
@@ -406,6 +413,11 @@ class TabManager {
         document.getElementById('refresh-scraper-logs')?.addEventListener('click', () => this._loadScraperLogs())
         document.getElementById('scraper-status-filter')?.addEventListener('change', () => this._loadScraperLogs())
 
+        // App logs
+        document.getElementById('refresh-app-logs')?.addEventListener('click', () => this._loadAppLogs())
+        document.getElementById('app-log-level-filter')?.addEventListener('change', () => this._loadAppLogs())
+        document.getElementById('app-log-source-filter')?.addEventListener('change', () => this._loadAppLogs())
+
         // Audit logs
         document.getElementById('refresh-audit-logs')?.addEventListener('click', () => this._loadAuditLogs())
         document.getElementById('audit-severity-filter')?.addEventListener('change', () => this._loadAuditLogs())
@@ -455,6 +467,7 @@ class TabManager {
         )
         // Lazy-load sections
         if (section === 'scraper-logs')  this._loadScraperLogs()
+        if (section === 'app-logs')      this._loadAppLogs()
         if (section === 'audit-logs')    this._loadAuditLogs()
         if (section === 'users')         this._loadAdminUsers()
         if (section === 'cache')         this._loadCacheEntries()
@@ -493,8 +506,38 @@ class TabManager {
             const data = await res.json()
             if (!data.success) { container.innerHTML = '<p class="admin-empty">Failed to load logs.</p>'; return }
             if (!data.logs?.length) { container.innerHTML = '<p class="admin-empty">No scraper logs yet.</p>'; return }
-            container.innerHTML = this._buildTable(data.logs, ['source','status','items_scraped','error_msg','started_at','finished_at'])
+            container.innerHTML = this._buildTable(data.logs, ['source_name','status','items_scraped','error_message','started_at','completed_at'])
         } catch { container.innerHTML = '<p class="admin-empty">Error loading logs.</p>' }
+    }
+
+    async _loadAppLogs() {
+        const container = document.getElementById('app-logs-table')
+        if (!container) return
+        const level  = document.getElementById('app-log-level-filter')?.value || ''
+        const source = document.getElementById('app-log-source-filter')?.value || ''
+        try {
+            let url = `/api/admin/logs/app?limit=200`
+            if (level)  url += `&level=${level}`
+            if (source) url += `&source=${source}`
+            const res  = await this._fetch(url)
+            const data = await res.json()
+            if (!data.success) { container.innerHTML = '<p class="admin-empty">Failed to load app logs.</p>'; return }
+            if (!data.logs?.length) { container.innerHTML = '<p class="admin-empty">No application logs yet. Logs appear here when AI pipeline, research, or error events occur.</p>'; return }
+            let h = '<div class="results-table-wrapper"><table class="results-table"><thead><tr><th>Level</th><th>Source</th><th>Message</th><th>User</th><th>Time</th></tr></thead><tbody>'
+            data.logs.forEach(log => {
+                const lvlClass = log.level === 'error' ? 'log-error' : log.level === 'warn' ? 'log-warn' : 'log-info'
+                const meta = log.metadata ? `<details><summary>details</summary><pre style="font-size:0.7rem;white-space:pre-wrap">${this._esc(log.metadata)}</pre></details>` : ''
+                h += `<tr class="${lvlClass}">
+                    <td><span class="log-level-badge log-${this._esc(log.level)}">${this._esc(log.level)}</span></td>
+                    <td>${this._esc(log.source)}</td>
+                    <td>${this._esc(log.message)}${meta}</td>
+                    <td>${this._esc(log.email || '—')}</td>
+                    <td style="white-space:nowrap">${new Date(log.created_at).toLocaleString()}</td>
+                </tr>`
+            })
+            h += '</tbody></table></div>'
+            container.innerHTML = h
+        } catch { container.innerHTML = '<p class="admin-empty">Error loading app logs.</p>' }
     }
 
     async _loadAuditLogs() {
