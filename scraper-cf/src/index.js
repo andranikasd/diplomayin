@@ -418,9 +418,7 @@ Return ONLY valid JSON: {"results":[{"entities":[{"name":"name","type":"company"
         parsed = Array.isArray(wrapper) ? wrapper : (wrapper.results || Object.values(wrapper)[0] || [])
     } catch (e) {
         console.error('Enrichment batch failed:', e.message)
-        for (const a of articles) {
-            await DB.prepare('UPDATE news_articles SET ai_processed=1 WHERE id=?').bind(a.id).run()
-        }
+        // Do NOT mark articles as processed — let them retry on next run
         return
     }
 

@@ -606,7 +606,9 @@ class TabManager {
         const newRole = currentRole === 'admin' ? 'user' : 'admin'
         if (!confirm(`Change role to "${newRole}"?`)) return
         try {
-            await this._fetch(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role: newRole }) })
+            const res  = await this._fetch(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ role: newRole }) })
+            const data = await res.json()
+            if (!data.success) { alert(data.error || 'Failed to update role.'); return }
             this._loadAdminUsers()
         } catch { alert('Error updating role.') }
     }
@@ -615,7 +617,9 @@ class TabManager {
         const msg = currentActive ? 'Disable this user?' : 'Enable this user?'
         if (!confirm(msg)) return
         try {
-            await this._fetch(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ is_active: !currentActive }) })
+            const res  = await this._fetch(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ is_active: !currentActive }) })
+            const data = await res.json()
+            if (!data.success) { alert(data.error || 'Failed to update user.'); return }
             this._loadAdminUsers()
         } catch { alert('Error updating user.') }
     }

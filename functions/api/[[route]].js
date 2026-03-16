@@ -343,7 +343,7 @@ async function cacheCheck(DB, question) {
     // Fuzzy slug overlap (>60% keywords in common)
     try {
         const words = norm.split(' ').filter(w => w.length > 3)
-        if (words.length > 1) {
+        if (words.length >= 3) {
             const { results: candidates } = await DB.prepare(
                 'SELECT * FROM query_cache WHERE researched=1 LIMIT 50'
             ).all()
@@ -615,37 +615,44 @@ function isSafeSQL(sql) {
 }
 
 // Keyword fallback SQL using data_points + entities
+// Returns {sql, params} — always parameterized, never interpolated
 function nlpToSQL(question) {
     const q = question.toLowerCase()
 
     if (q.match(/compan|business|firm|brand|startup/)) {
         if (q.match(/top|revenue|biggest|largest/))
-            return "SELECT name, type, industry, revenue_amd, employee_count, city FROM entities WHERE revenue_amd IS NOT NULL ORDER BY revenue_amd DESC LIMIT 10"
+            return { sql: "SELECT name, type, industry, revenue_amd, employee_count, city FROM entities WHERE revenue_amd IS NOT NULL ORDER BY revenue_amd DESC LIMIT 10", params: [] }
         if (q.match(/tech|it\b|software/))
-            return "SELECT name, type, industry, employee_count, city FROM entities WHERE industry LIKE '%tech%' OR industry LIKE '%IT%' OR industry LIKE '%software%' ORDER BY employee_count DESC LIMIT 20"
-        return "SELECT name, type, industry, city, employee_count FROM entities ORDER BY created_at DESC LIMIT 20"
+            return { sql: "SELECT name, type, industry, employee_count, city FROM entities WHERE industry LIKE ? OR industry LIKE ? OR industry LIKE ? ORDER BY employee_count DESC LIMIT 20", params: ['%tech%', '%IT%', '%software%'] }
+        return { sql: "SELECT name, type, industry, city, employee_count FROM entities ORDER BY created_at DESC LIMIT 20", params: [] }
     }
     if (q.match(/news|article|headline/)) {
         const cats = { tech: 'technology', econom: 'economy', politi: 'politics', sport: 'sports', cultur: 'culture', health: 'health' }
         for (const [key, cat] of Object.entries(cats)) {
-            if (q.includes(key)) return `SELECT title, summary, source, category, published_date FROM news_articles WHERE category = '${cat}' ORDER BY published_date DESC LIMIT 20`
+            if (q.includes(key)) return { sql: "SELECT title, summary, source, category, published_date FROM news_articles WHERE category = ? ORDER BY published_date DESC LIMIT 20", params: [cat] }
         }
-        return "SELECT title, summary, source, category, published_date FROM news_articles ORDER BY published_date DESC LIMIT 20"
+        return { sql: "SELECT title, summary, source, category, published_date FROM news_articles ORDER BY published_date DESC LIMIT 20", params: [] }
     }
     if (q.match(/population|demographic/))
-        return "SELECT entity, attribute, value_num, unit, period, location FROM data_points WHERE domain='demographics' ORDER BY period DESC LIMIT 30"
+        return { sql: "SELECT entity, attribute, value_num, unit, period, location FROM data_points WHERE domain=? ORDER BY period DESC LIMIT 30", params: ['demographics'] }
     if (q.match(/gdp|econom|growth/))
-        return "SELECT entity, attribute, value_num, unit, period FROM data_points WHERE domain='economy' ORDER BY period DESC LIMIT 30"
+        return { sql: "SELECT entity, attribute, value_num, unit, period FROM data_points WHERE domain=? ORDER BY period DESC LIMIT 30", params: ['economy'] }
     if (q.match(/exchange|rate|amd|usd|eur/))
-        return "SELECT base, target, rate, date FROM exchange_rates ORDER BY date DESC LIMIT 20"
+        return { sql: "SELECT base, target, rate, date FROM exchange_rates ORDER BY date DESC LIMIT 20", params: [] }
     if (q.match(/health|hospital|doctor|physician/))
-        return "SELECT attribute, value_num, unit, period FROM data_points WHERE domain='health' ORDER BY period DESC LIMIT 20"
+        return { sql: "SELECT attribute, value_num, unit, period FROM data_points WHERE domain=? ORDER BY period DESC LIMIT 20", params: ['health'] }
     if (q.match(/labor|employ|unemployment/))
-        return "SELECT attribute, value_num, unit, period FROM data_points WHERE domain='labor' ORDER BY period DESC LIMIT 20"
+        return { sql: "SELECT attribute, value_num, unit, period FROM data_points WHERE domain=? ORDER BY period DESC LIMIT 20", params: ['labor'] }
 
-    return `SELECT 'data_points' AS tbl, COUNT(*) AS n FROM data_points
-            UNION ALL SELECT 'entities', COUNT(*) FROM entities
-            UNION ALL SELECT 'news_articles', COUNT(*) FROM news_articles`
+    return { sql: "SELECT 'data_points' AS tbl, COUNT(*) AS n FROM data_points UNION ALL SELECT 'entities', COUNT(*) FROM entities UNION ALL SELECT 'news_articles', COUNT(*) FROM news_articles", params: [] }
+}
+
+// Execute an nlpToSQL result safely — parameterized, validated
+async function runNlpSQL(DB, nlp) {
+    if (!isSafeSQL(nlp.sql)) return []
+    const stmt = nlp.params.length ? DB.prepare(nlp.sql).bind(...nlp.params) : DB.prepare(nlp.sql)
+    const { results } = await stmt.all()
+    return results || []
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -888,9 +895,10 @@ app.post('/chat', (c) => requireAuth(c, async () => {
                     }
                 } catch {
                     // AI SQL failed — fallback to keyword
-                    sql = nlpToSQL(message)
+                    const nlp1 = nlpToSQL(message)
+                    sql = nlp1.sql
                     sqlSource = 'keyword_fallback'
-                    try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
+                    try { results = await runNlpSQL(DB, nlp1) } catch { /* give up */ }
                 }
             }
         } catch (e) {
@@ -901,9 +909,10 @@ app.post('/chat', (c) => requireAuth(c, async () => {
 
     // ── Keyword fallback if nothing worked ───────────────────
     if (!results.length && !sql) {
-        sql = nlpToSQL(message)
+        const nlp2 = nlpToSQL(message)
+        sql = nlp2.sql
         sqlSource = 'keyword'
-        try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
+        try { results = await runNlpSQL(DB, nlp2) } catch { /* give up */ }
     }
 
     // ── AI knowledge fallback — always give an answer ─────────
@@ -927,8 +936,8 @@ app.post('/chat', (c) => requireAuth(c, async () => {
                             if (freshRows?.length) { results = freshRows; sql = freshSql }
                         }
                     } catch { /* non-fatal — use stored rows */ }
+                    researched = true
                 }
-                researched = true
                 await appLog(DB, { level: 'info', source: 'ai', message: `AI knowledge used for: "${message.slice(0, 120)}"`, metadata: { domain: generated.domain, rows: generated.rows?.length ?? 0 }, userId: user.id })
             }
         } catch (e) {
