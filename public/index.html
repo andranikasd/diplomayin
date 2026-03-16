@@ -47,18 +47,20 @@
         </svg>
         SQL Editor
       </button>
-      <button class="nav-item" data-tab="graph">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-        </svg>
-        Network Graph
-      </button>
       <button class="nav-item" data-tab="security">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
         Security
+      </button>
+      <!-- Admin tab — rendered only for role='admin' via JS -->
+      <button class="nav-item nav-item-admin" data-tab="admin" id="admin-nav-item" style="display:none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="8" r="4"/>
+          <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+          <polyline points="22 12 20 14 18 12"/>
+        </svg>
+        Admin
       </button>
     </nav>
 
@@ -109,25 +111,36 @@
             </svg>
           </div>
           <h1>Armenian OSINT Analytics</h1>
-          <p>Ask anything about Armenian market intelligence — companies, statistics, news, financial data and trends.</p>
+          <p>Ask anything about Armenian market intelligence — demographics, economy, companies, news, and more. If data isn't in the database it will be researched from the web automatically.</p>
           <div class="suggestions">
-            <button class="suggestion" data-query="Show top 10 companies by revenue">
+            <button class="suggestion" data-query="What is the current population of Armenia by region?">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+              <div>
+                <div class="suggestion-title">Regional population</div>
+                <div class="suggestion-desc">Demographics by province</div>
+              </div>
+            </button>
+            <button class="suggestion" data-query="Show GDP and economic growth statistics for Armenia">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="20" x2="12" y2="10"/>
+                <line x1="18" y1="20" x2="18" y2="4"/>
+                <line x1="6"  y1="20" x2="6"  y2="16"/>
+              </svg>
+              <div>
+                <div class="suggestion-title">Economic data</div>
+                <div class="suggestion-desc">GDP & growth stats</div>
+              </div>
+            </button>
+            <button class="suggestion" data-query="What are the top cigarette brands in Armenia by market share?">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
               </svg>
               <div>
-                <div class="suggestion-title">Top companies</div>
-                <div class="suggestion-desc">Ranked by revenue</div>
-              </div>
-            </button>
-            <button class="suggestion" data-query="Show me a chart of companies by industry">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
-                <path d="M22 12A10 10 0 0 0 12 2v10z"/>
-              </svg>
-              <div>
-                <div class="suggestion-title">Industry breakdown</div>
-                <div class="suggestion-desc">Companies by sector</div>
+                <div class="suggestion-title">Market research</div>
+                <div class="suggestion-desc">Brand market share</div>
               </div>
             </button>
             <button class="suggestion" data-query="What are the latest technology news in Armenia?">
@@ -140,24 +153,13 @@
                 <div class="suggestion-desc">Tech news in Armenia</div>
               </div>
             </button>
-            <button class="suggestion" data-query="Show GDP and economic statistics for Armenia">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="20" x2="12" y2="10"/>
-                <line x1="18" y1="20" x2="18" y2="4"/>
-                <line x1="6"  y1="20" x2="6"  y2="16"/>
-              </svg>
-              <div>
-                <div class="suggestion-title">Economic data</div>
-                <div class="suggestion-desc">GDP & statistics</div>
-              </div>
-            </button>
           </div>
         </div>
       </div>
 
       <div class="input-wrapper">
         <div class="input-container">
-          <textarea id="message-input" placeholder="Ask about Armenian market data, companies, news…" rows="1"></textarea>
+          <textarea id="message-input" placeholder="Ask about Armenian data — demographics, economy, companies, market research…" rows="1"></textarea>
           <button id="send-btn" class="send-btn" title="Send">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -174,7 +176,7 @@
         <div class="sql-editor-header">
           <div>
             <h3>SQL Query Editor</h3>
-            <p class="sql-editor-hint">SELECT queries only — write operations are restricted</p>
+            <p class="sql-editor-hint">SELECT queries only · Tables: data_points, entities, news_articles, exchange_rates</p>
           </div>
           <div class="sql-actions">
             <button id="run-sql-btn" class="btn-primary">
@@ -186,7 +188,7 @@
         </div>
         <div class="sql-editor-wrapper">
           <div class="line-numbers" id="line-numbers">1</div>
-          <textarea id="sql-editor" class="sql-editor" placeholder="-- Write your SQL query here&#10;SELECT name, industry, employee_count FROM companies ORDER BY employee_count DESC LIMIT 10;" spellcheck="false"></textarea>
+          <textarea id="sql-editor" class="sql-editor" placeholder="-- Write your SQL query here&#10;SELECT domain, attribute, value_num, unit, period FROM data_points WHERE domain='demographics' ORDER BY period DESC LIMIT 20;" spellcheck="false"></textarea>
         </div>
         <div class="sql-results" id="sql-results">
           <div class="results-placeholder">
@@ -202,48 +204,151 @@
       </div>
     </div>
 
-    <!-- ── Graph Tab ─────────────────────────────────────────── -->
-    <div class="tab-content" id="graph-tab">
-      <div class="graph-container">
-        <div class="graph-toolbar">
-          <div class="graph-toolbar-left">
-            <span class="graph-title">Company Network Graph</span>
-            <span class="graph-subtitle" id="graph-info">Loading…</span>
-          </div>
-          <div class="graph-toolbar-right">
-            <div class="graph-search-wrap">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input id="graph-search" class="graph-search" placeholder="Search company…" autocomplete="off">
-            </div>
-            <select id="graph-filter" class="graph-select">
-              <option value="">All industries</option>
-            </select>
-            <div class="graph-zoom-btns">
-              <button id="graph-zoom-in"  class="btn-secondary" title="Zoom in">+</button>
-              <button id="graph-zoom-out" class="btn-secondary" title="Zoom out">−</button>
-              <button id="graph-reset-btn" class="btn-secondary" title="Reset layout">↺</button>
-            </div>
-          </div>
-        </div>
-        <div class="graph-body">
-          <svg id="network-svg" class="network-svg"></svg>
-          <div id="graph-detail" class="graph-detail" style="display:none"></div>
-        </div>
-        <div id="graph-tooltip" class="graph-tooltip" style="display:none"></div>
-        <div class="graph-legend" id="graph-legend"></div>
-      </div>
-    </div>
-
     <!-- ── Security Tab ──────────────────────────────────────── -->
     <div class="tab-content" id="security-tab">
       <div class="security-container" id="security-container"></div>
     </div>
 
+    <!-- ── Admin Tab (visible only for role='admin') ─────────── -->
+    <div class="tab-content" id="admin-tab">
+      <div class="admin-container">
+
+        <!-- Admin sub-tabs -->
+        <div class="admin-tabs">
+          <button class="admin-tab-btn active" data-section="overview">Overview</button>
+          <button class="admin-tab-btn" data-section="scraper-logs">Scraper Logs</button>
+          <button class="admin-tab-btn" data-section="audit-logs">Audit Logs</button>
+          <button class="admin-tab-btn" data-section="users">User Management</button>
+          <button class="admin-tab-btn" data-section="sql-editor">DB Access</button>
+          <button class="admin-tab-btn" data-section="cache">Query Cache</button>
+          <button class="admin-tab-btn" data-section="data-mgmt">Data Management</button>
+        </div>
+
+        <!-- Overview section -->
+        <div class="admin-section active" id="admin-section-overview">
+          <h3 class="admin-section-title">System Overview</h3>
+          <div class="admin-stats-grid" id="admin-stats-grid">
+            <div class="admin-stat-card"><div class="stat-label">Data Points</div><div class="stat-value" id="stat-dp">—</div></div>
+            <div class="admin-stat-card"><div class="stat-label">Entities</div><div class="stat-value" id="stat-entities">—</div></div>
+            <div class="admin-stat-card"><div class="stat-label">News Articles</div><div class="stat-value" id="stat-news">—</div></div>
+            <div class="admin-stat-card"><div class="stat-label">Cache Entries</div><div class="stat-value" id="stat-cache">—</div></div>
+            <div class="admin-stat-card"><div class="stat-label">Cache Hits</div><div class="stat-value" id="stat-hits">—</div></div>
+            <div class="admin-stat-card"><div class="stat-label">Total Users</div><div class="stat-value" id="stat-users">—</div></div>
+          </div>
+          <h4 style="margin:1.5rem 0 0.75rem;color:var(--text-secondary)">Data by Domain</h4>
+          <div class="admin-domain-grid" id="admin-domain-grid"></div>
+        </div>
+
+        <!-- Scraper logs section -->
+        <div class="admin-section" id="admin-section-scraper-logs">
+          <div class="admin-section-header">
+            <h3 class="admin-section-title">Scraper Logs</h3>
+            <div class="admin-section-actions">
+              <select id="scraper-status-filter" class="admin-select">
+                <option value="">All statuses</option>
+                <option value="running">Running</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+              </select>
+              <button class="btn-secondary" id="refresh-scraper-logs">Refresh</button>
+            </div>
+          </div>
+          <div id="scraper-logs-table"></div>
+        </div>
+
+        <!-- Audit logs section -->
+        <div class="admin-section" id="admin-section-audit-logs">
+          <div class="admin-section-header">
+            <h3 class="admin-section-title">Audit Logs</h3>
+            <div class="admin-section-actions">
+              <select id="audit-severity-filter" class="admin-select">
+                <option value="">All severities</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button class="btn-secondary" id="refresh-audit-logs">Refresh</button>
+            </div>
+          </div>
+          <div id="audit-logs-table"></div>
+        </div>
+
+        <!-- Users section -->
+        <div class="admin-section" id="admin-section-users">
+          <div class="admin-section-header">
+            <h3 class="admin-section-title">User Management</h3>
+            <button class="btn-primary" id="create-user-btn">+ Create User</button>
+          </div>
+          <div id="create-user-form" class="admin-form" style="display:none">
+            <input class="admin-input" id="new-user-email" type="email" placeholder="Email">
+            <input class="admin-input" id="new-user-password" type="password" placeholder="Password (min 8 chars)">
+            <input class="admin-input" id="new-user-name" type="text" placeholder="Full name (optional)">
+            <select class="admin-select" id="new-user-role">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+            <button class="btn-primary" id="submit-create-user">Create</button>
+            <button class="btn-secondary" id="cancel-create-user">Cancel</button>
+          </div>
+          <div id="users-table"></div>
+        </div>
+
+        <!-- SQL editor section (full DB access) -->
+        <div class="admin-section" id="admin-section-sql-editor">
+          <h3 class="admin-section-title">Database Access — Public DB</h3>
+          <p class="admin-hint">SELECT queries on any table in the public database (data_points, entities, users, scraper_jobs, audit_log…)</p>
+          <div class="sql-editor-wrapper admin-sql-wrapper">
+            <div class="line-numbers" id="admin-line-numbers">1</div>
+            <textarea id="admin-sql-editor" class="sql-editor" placeholder="-- Admin SQL — full access&#10;SELECT * FROM users LIMIT 20;" spellcheck="false"></textarea>
+          </div>
+          <div class="sql-actions" style="margin-top:0.5rem">
+            <button class="btn-primary" id="run-admin-sql">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              Run
+            </button>
+            <button class="btn-secondary" id="clear-admin-sql">Clear</button>
+          </div>
+          <div id="admin-sql-results"></div>
+        </div>
+
+        <!-- Query cache section -->
+        <div class="admin-section" id="admin-section-cache">
+          <div class="admin-section-header">
+            <h3 class="admin-section-title">Query Cache</h3>
+            <button class="btn-secondary" id="refresh-cache">Refresh</button>
+          </div>
+          <p class="admin-hint">Cross-user deduplication cache. Entries with researched=1 contain web-fetched data.</p>
+          <div id="cache-table"></div>
+        </div>
+
+        <!-- Data management section -->
+        <div class="admin-section" id="admin-section-data-mgmt">
+          <h3 class="admin-section-title">Data Management</h3>
+          <div class="admin-data-actions">
+            <div class="admin-action-card">
+              <h4>Trigger Scraper</h4>
+              <p>Run all data scrapers now (World Bank, IMF, FX, News)</p>
+              <button class="btn-primary" id="trigger-scrape-btn">Run Scraper</button>
+              <div id="scrape-result" class="admin-result"></div>
+            </div>
+            <div class="admin-action-card">
+              <h4>Research Topic</h4>
+              <p>Trigger on-demand web research for any topic and store in data_points</p>
+              <input class="admin-input" id="research-topic-input" placeholder="e.g. top supermarket chains in Yerevan">
+              <button class="btn-primary" id="trigger-research-btn">Research</button>
+              <div id="research-result" class="admin-result"></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
   </main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="/js/network-graph.js"></script>
 <script src="/js/security.js"></script>
 <script src="/js/app-tabs.js"></script>
 </body>

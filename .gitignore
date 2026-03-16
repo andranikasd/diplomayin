@@ -2,7 +2,7 @@
 node_modules/
 package-lock.json
 yarn.lock
-
+PLAN.md
 # Environment variables
 .env
 .env.local

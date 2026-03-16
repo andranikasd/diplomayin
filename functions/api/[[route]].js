@@ -2,6 +2,10 @@
  * Armenian OSINT Analytics — Cloudflare Pages Functions
  * All /api/* routes handled by Hono running on CF Workers runtime
  * Database: D1 (SQLite)  Auth: Web Crypto (PBKDF2 + HMAC-SHA256 JWT)
+ *
+ * Data layer: unified data_points + entities tables (replaces statistics/facts/market_data/companies)
+ * AI pipeline: 3-step (introspect live catalog → plan → execute or research)
+ * Query cache: SHA-256 hash + slug deduplication across all users
  */
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -135,12 +139,10 @@ function detectSQLi(input) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// IP FILTER (allowlist / denylist with CIDR support)
+// IP FILTER
 // ─────────────────────────────────────────────────────────────
 
-function ipToInt(ip) {
-    return ip.split('.').reduce((acc, o) => (acc << 8) + (+o), 0) >>> 0
-}
+function ipToInt(ip) { return ip.split('.').reduce((acc, o) => (acc << 8) + (+o), 0) >>> 0 }
 
 function ipInCidr(ip, cidr) {
     if (!cidr.includes('/')) return ip === cidr
@@ -162,7 +164,7 @@ async function audit(DB, { userId, action, ip, ua, metadata, severity = 'info' }
 }
 
 // ─────────────────────────────────────────────────────────────
-// RATE LIMITING (sliding window, stored in D1)
+// RATE LIMITING
 // ─────────────────────────────────────────────────────────────
 
 async function checkRateLimit(DB, key, { windowMs = 60_000, max = 60 }) {
@@ -172,7 +174,7 @@ async function checkRateLimit(DB, key, { windowMs = 60_000, max = 60 }) {
         const row = await DB.prepare('SELECT COUNT(*) AS n FROM rate_limit_log WHERE key = ?').bind(key).first()
         if ((row?.n ?? 0) >= max) return false
         await DB.prepare('INSERT INTO rate_limit_log (key) VALUES (?)').bind(key).run()
-    } catch { /* non-fatal, allow through */ }
+    } catch { /* non-fatal */ }
     return true
 }
 
@@ -212,12 +214,8 @@ async function ipFilter(c, next) {
         const { results } = await c.env.DB.prepare('SELECT rule_type, ip_or_cidr FROM ip_rules').all()
         const deny = results.filter(r => r.rule_type === 'deny')
         const allow = results.filter(r => r.rule_type === 'allow')
-        if (deny.some(r => ipInCidr(ip, r.ip_or_cidr))) {
-            return c.json({ success: false, error: 'Access denied' }, 403)
-        }
-        if (allow.length > 0 && !allow.some(r => ipInCidr(ip, r.ip_or_cidr))) {
-            return c.json({ success: false, error: 'Access denied' }, 403)
-        }
+        if (deny.some(r => ipInCidr(ip, r.ip_or_cidr))) return c.json({ success: false, error: 'Access denied' }, 403)
+        if (allow.length > 0 && !allow.some(r => ipInCidr(ip, r.ip_or_cidr))) return c.json({ success: false, error: 'Access denied' }, 403)
     } catch { /* table may not exist yet */ }
     return next()
 }
@@ -225,29 +223,351 @@ async function ipFilter(c, next) {
 app.use('*', ipFilter)
 
 // ─────────────────────────────────────────────────────────────
-// NLP → SQL
+// STATIC SCHEMA + LIVE CATALOG BUILDER
 // ─────────────────────────────────────────────────────────────
 
+const STATIC_SCHEMA = `
+SQLite database — all data is about Armenia.
+
+=== PRIMARY DATA TABLE ===
+data_points(id, domain, category, subcategory, entity, attribute, value_text, value_num, unit, location, period, source_name, source_url, confidence, created_at, updated_at)
+  domain: 'demographics','economy','business','health','environment','infrastructure','social','geography','politics','labor','education','technology','banking','general'
+  entity: the subject (e.g. 'Armenia', 'Yerevan', 'Araratsotn', 'Marlboro', a company name)
+  attribute: what is measured (e.g. 'Population, total', 'GDP (current USD)', 'market_share_pct')
+  location: country or city/region (default 'Armenia')
+  period: year string '2023' or '2023-Q1', empty string for timeless facts
+  confidence: 'high' (official API), 'medium' (publication), 'low' (web-scraped), 'ai_inferred'
+
+=== ENTITIES TABLE (companies, brands, NGOs, government bodies) ===
+entities(id, name, type, domain, industry, description, city, country, website, founded_year, employee_count, revenue_amd, source, ai_extracted, created_at)
+  type: 'company','brand','organization','government_body','ngo','university','media_outlet','political_party'
+
+=== NEWS ===
+news_articles(id, title, summary, source, source_url, published_date, category, sentiment, language, ai_processed, created_at)
+  category: 'technology','economy','politics','sports','culture','health','general'
+  sentiment: 'positive','neutral','negative'
+news_entities(news_id, entity_id) -- links articles to entities
+
+=== EXCHANGE RATES ===
+exchange_rates(id, base, target, rate, date, source, created_at)
+  base is always 'AMD'. Targets: 'USD','EUR','RUB','GBP','CNY','GEL','IRR','AED','CHF','JPY','CAD','AUD'
+
+Rules: SELECT only · LIMIT 50 max · SQLite syntax · Use JOINs when relevant
+NEVER query: users, audit_log, rate_limit_log, ip_rules, user_totp, threat_cache, anomaly_events, scraper_jobs, chat_history, rate_limits, query_cache
+`
+
+// Builds schema + appends live data catalog so AI knows exact values that exist
+async function buildDynamicSchema(DB) {
+    try {
+        // What domains/attributes exist
+        const { results: catalog } = await DB.prepare(`
+            SELECT domain, attribute, unit,
+                   MIN(period) as from_yr, MAX(period) as to_yr,
+                   COUNT(DISTINCT location) as n_locs,
+                   COUNT(*) as n_rows
+            FROM data_points
+            GROUP BY domain, attribute
+            ORDER BY domain, attribute
+            LIMIT 300
+        `).all()
+
+        // What locations have data
+        const { results: locs } = await DB.prepare(
+            `SELECT DISTINCT location FROM data_points WHERE location != 'Armenia' ORDER BY location LIMIT 30`
+        ).all()
+
+        // Domain row counts
+        const { results: domainCounts } = await DB.prepare(
+            `SELECT domain, COUNT(*) as n FROM data_points GROUP BY domain ORDER BY n DESC`
+        ).all()
+
+        let schema = STATIC_SCHEMA + '\n=== LIVE DATA CATALOG (data_points) ===\n'
+        schema += `Total rows: ${domainCounts.reduce((s, d) => s + d.n, 0)}\n`
+        schema += domainCounts.map(d => `  ${d.domain}: ${d.n} rows`).join('\n') + '\n'
+
+        let prevDomain = ''
+        for (const row of catalog) {
+            if (row.domain !== prevDomain) { schema += `\n[${row.domain}]\n`; prevDomain = row.domain }
+            const locNote = row.n_locs > 1 ? ` [${row.n_locs} locations]` : ''
+            schema += `  "${row.attribute}" (${row.unit || 'no unit'}) ${row.from_yr || ''}–${row.to_yr || ''}${locNote}\n`
+        }
+
+        if (locs.length) {
+            schema += `\nLocations with data beyond 'Armenia': ${locs.map(l => l.location).join(', ')}\n`
+        }
+
+        return schema
+    } catch (e) {
+        console.error('buildDynamicSchema:', e.message)
+        return STATIC_SCHEMA
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// QUERY CACHE HELPERS
+// ─────────────────────────────────────────────────────────────
+
+function normalizeQuery(q) {
+    return q.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+}
+
+function querySlug(q) {
+    return normalizeQuery(q).replace(/\s+/g, '_').slice(0, 100)
+}
+
+async function cacheCheck(DB, question) {
+    const norm = normalizeQuery(question)
+    const hash = await sha256Hex(norm)
+    const slug = querySlug(question)
+
+    // Exact hash match
+    try {
+        const exact = await DB.prepare(
+            'SELECT * FROM query_cache WHERE hash = ?'
+        ).bind(hash).first()
+        if (exact) {
+            await DB.prepare(
+                'UPDATE query_cache SET hit_count=hit_count+1, last_hit_at=CURRENT_TIMESTAMP WHERE hash=?'
+            ).bind(hash).run()
+            return { hit: 'exact', entry: exact, hash, slug }
+        }
+    } catch { /* table may not exist */ }
+
+    // Fuzzy slug overlap (>60% keywords in common)
+    try {
+        const words = norm.split(' ').filter(w => w.length > 3)
+        if (words.length > 1) {
+            const { results: candidates } = await DB.prepare(
+                'SELECT * FROM query_cache WHERE researched=1 LIMIT 50'
+            ).all()
+            for (const c of candidates) {
+                const cWords = c.slug.split('_').filter(w => w.length > 3)
+                const common = words.filter(w => cWords.includes(w)).length
+                const score  = common / Math.max(words.length, cWords.length)
+                if (score >= 0.6) {
+                    await DB.prepare(
+                        'UPDATE query_cache SET hit_count=hit_count+1, last_hit_at=CURRENT_TIMESTAMP WHERE id=?'
+                    ).bind(c.id).run()
+                    return { hit: 'fuzzy', entry: c, hash, slug }
+                }
+            }
+        }
+    } catch { /* non-fatal */ }
+
+    return { hit: 'none', entry: null, hash, slug }
+}
+
+async function cacheStore(DB, { hash, slug, original_query, sql_generated, data_domain, result_count, researched }) {
+    try {
+        await DB.prepare(`
+            INSERT INTO query_cache (hash, slug, original_query, sql_generated, data_domain, result_count, researched, hit_count, last_hit_at)
+            VALUES (?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP)
+            ON CONFLICT(hash) DO UPDATE SET
+              sql_generated=excluded.sql_generated, result_count=excluded.result_count,
+              researched=MAX(researched, excluded.researched),
+              hit_count=hit_count+1, last_hit_at=CURRENT_TIMESTAMP
+        `).bind(hash, slug, original_query, sql_generated || null, data_domain || null, result_count || 0, researched ? 1 : 0).run()
+    } catch { /* non-fatal */ }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ON-DEMAND RESEARCH (Brave Search + Jina Reader + AI extract)
+// ─────────────────────────────────────────────────────────────
+
+async function braveSearch(query, apiKey) {
+    try {
+        const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`
+        const res = await fetch(url, {
+            headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey },
+        })
+        if (!res.ok) { console.warn(`Brave ${res.status}`); return [] }
+        const data = await res.json()
+        return (data.web?.results || []).map(r => ({ title: r.title, url: r.url, description: r.description || '' }))
+    } catch (e) { console.warn('Brave search:', e.message); return [] }
+}
+
+async function fetchJina(pageUrl) {
+    try {
+        const res = await fetch(`https://r.jina.ai/${pageUrl}`, {
+            headers: { 'Accept': 'text/plain', 'X-Timeout': '10' },
+        })
+        if (!res.ok) return ''
+        return (await res.text()).slice(0, 5000)
+    } catch { return '' }
+}
+
+async function aiExtractDataPoints(question, corpus, apiKey) {
+    const system = `Armenian market intelligence analyst. Extract structured data from the provided web content.
+Return JSON:
+{
+  "domain": "one of: demographics|economy|business|health|environment|labor|education|technology|banking|social|politics|geography",
+  "category": "sub-topic slug e.g. cigarette_brands",
+  "rows": [
+    { "entity": "name", "attribute": "metric_name", "value_text": "text", "value_num": 123.4, "unit": "%", "location": "Armenia or city", "period": "2024", "confidence": "high|medium|low" }
+  ],
+  "source_name": "Publication or site name",
+  "not_found": false
+}
+Rules: entity = thing measured; attribute = metric; location = "Armenia" if national; period = year string; not_found=true if no relevant data; ONLY valid JSON.`
+    try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: system },
+                    { role: 'user', content: `Question: ${question}\n\nWeb content:\n${corpus}` },
+                ],
+                max_tokens: 1500, temperature: 0,
+            }),
+        })
+        const data = await res.json()
+        const raw = data.choices?.[0]?.message?.content?.trim() || '{}'
+        const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '').trim()
+        return JSON.parse(cleaned)
+    } catch (e) { console.error('aiExtract:', e.message); return { not_found: true } }
+}
+
+async function storeDataPoints(DB, domain, category, rows, sourceName, sourceUrl) {
+    let count = 0
+    for (const row of rows) {
+        try {
+            const r = await DB.prepare(`
+                INSERT OR IGNORE INTO data_points
+                  (domain, category, entity, attribute, value_text, value_num, unit, location, period, source_name, source_url, confidence)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            `).bind(
+                domain || 'general',
+                category || null,
+                row.entity || '',
+                row.attribute || 'value',
+                row.value_text || null,
+                typeof row.value_num === 'number' ? row.value_num : null,
+                row.unit || null,
+                row.location || 'Armenia',
+                row.period || String(new Date().getFullYear()),
+                row.source_name || sourceName || '',
+                sourceUrl || null,
+                ['high','medium','low'].includes(row.confidence) ? row.confidence : 'medium',
+            ).run()
+            if (r.meta?.changes > 0) count++
+        } catch { /* duplicate */ }
+    }
+    return count
+}
+
+// Full research pipeline — returns { rows, fromCache, domain, category } or null
+async function researchQuestion(question, DB, openaiKey, braveKey) {
+    // Step 1: Brave search
+    const searchResults = await braveSearch(`${question} Armenia`, braveKey)
+    if (!searchResults.length) return null
+
+    // Step 2: Fetch top 3 pages via Jina (free)
+    const pages = await Promise.all(searchResults.slice(0, 3).map(r => fetchJina(r.url)))
+    const corpus = searchResults.slice(0, 3).map((r, i) =>
+        `[${r.title}] ${r.url}\n${r.description}\n${pages[i] || ''}`
+    ).join('\n\n---\n\n')
+
+    if (!corpus.trim()) return null
+
+    // Step 3: AI extracts structured rows
+    const extracted = await aiExtractDataPoints(question, corpus, openaiKey)
+    if (extracted.not_found || !extracted.rows?.length) return null
+
+    // Step 4: Store into data_points
+    await storeDataPoints(DB, extracted.domain, extracted.category, extracted.rows, extracted.source_name, searchResults[0]?.url)
+
+    return { rows: extracted.rows, fromCache: false, domain: extracted.domain, category: extracted.category }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 3-STEP AI PIPELINE
+// Step 1: introspect live catalog
+// Step 2: AI decides — data exists (→ SQL) or missing (→ "needs_research")
+// Step 3: execute SQL or trigger research then re-query
+// ─────────────────────────────────────────────────────────────
+
+async function aiPlan(question, schema, apiKey) {
+    const system = `You are a SQL expert for an Armenian analytics database.
+
+${schema}
+
+Your task:
+1. Examine the LIVE DATA CATALOG above
+2. Decide if relevant data exists for the user's question
+3. If YES: return a precise SQL SELECT query using actual column values from the catalog
+4. If NO:  return exactly the string: NEEDS_RESEARCH
+
+Rules for SQL:
+- SELECT only, no semicolon, LIMIT 50
+- Use data_points for all statistical/demographic/economic/business data
+- Use entities for companies/brands/organizations
+- Match attribute names EXACTLY as shown in the catalog
+- For regional data: WHERE location != 'Armenia'
+- For national data: WHERE location = 'Armenia' OR WHERE entity = 'Armenia'
+
+Return ONLY the SQL or ONLY the string NEEDS_RESEARCH — no explanation, no markdown.`
+
+    try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: system },
+                    { role: 'user', content: question },
+                ],
+                max_tokens: 500, temperature: 0,
+            }),
+        })
+        const data = await res.json()
+        const raw = data.choices?.[0]?.message?.content?.trim() || ''
+        return raw.replace(/^```sql\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/, '').replace(/;$/, '').trim()
+    } catch (e) { console.error('aiPlan:', e.message); return 'NEEDS_RESEARCH' }
+}
+
+async function aiInterpret(question, sql, results, apiKey, note = '') {
+    try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: 'You are a concise Armenian market analytics assistant. Interpret query results in 2-4 sentences. Be specific with numbers. If web research was used, mention it briefly.' },
+                    { role: 'user', content: `${note}Question: ${question}\nSQL: ${sql}\nResults (first 15): ${JSON.stringify(results.slice(0, 15))}\nTotal: ${results.length}` },
+                ],
+                max_tokens: 350, temperature: 0.4,
+            }),
+        })
+        const data = await res.json()
+        return data.choices?.[0]?.message?.content?.trim() || null
+    } catch { return null }
+}
+
+function isSafeSQL(sql) {
+    if (!sql || sql === 'NEEDS_RESEARCH') return false
+    const upper = sql.trim().toUpperCase()
+    if (!upper.startsWith('SELECT') && !upper.startsWith('WITH')) return false
+    const blocked = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'REPLACE', 'PRAGMA', 'ATTACH']
+    if (blocked.some(k => new RegExp(`\\b${k}\\b`).test(upper))) return false
+    // Block internal tables (data tables are allowed)
+    if (/\b(users|audit_log|rate_limit_log|ip_rules|user_totp|threat_cache|anomaly_events|scraper_jobs|chat_history|rate_limits|query_cache)\b/i.test(sql)) return false
+    return true
+}
+
+// Keyword fallback SQL using data_points + entities
 function nlpToSQL(question) {
     const q = question.toLowerCase()
-    if (q.match(/chart|pie|graph|visual|breakdown|distribution/)) {
-        if (q.includes('industri') || q.includes('sector'))
-            return "SELECT industry AS label, COUNT(*) AS value FROM companies WHERE industry IS NOT NULL GROUP BY industry ORDER BY value DESC LIMIT 15"
-        if (q.includes('news') || q.includes('categor'))
-            return "SELECT category AS label, COUNT(*) AS value FROM news_articles WHERE category IS NOT NULL GROUP BY category ORDER BY value DESC LIMIT 10"
-        if (q.includes('region') || q.includes('city'))
-            return "SELECT region AS label, AVG(value) AS value FROM statistics WHERE region IS NOT NULL GROUP BY region ORDER BY value DESC LIMIT 15"
-    }
-    if (q.match(/compan|business|firm/)) {
+
+    if (q.match(/compan|business|firm|brand|startup/)) {
         if (q.match(/top|revenue|biggest|largest/))
-            return "SELECT name, industry, revenue_estimate, employee_count, city FROM companies WHERE revenue_estimate IS NOT NULL ORDER BY revenue_estimate DESC LIMIT 10"
-        if (q.match(/industri|sector/))
-            return "SELECT industry, COUNT(*) AS company_count, AVG(revenue_estimate) AS avg_revenue FROM companies WHERE industry IS NOT NULL GROUP BY industry ORDER BY company_count DESC"
-        if (q.match(/employee|staff|size/))
-            return "SELECT name, industry, employee_count, city FROM companies WHERE employee_count IS NOT NULL ORDER BY employee_count DESC LIMIT 20"
+            return "SELECT name, type, industry, revenue_amd, employee_count, city FROM entities WHERE revenue_amd IS NOT NULL ORDER BY revenue_amd DESC LIMIT 10"
         if (q.match(/tech|it\b|software/))
-            return "SELECT name, website, employee_count, city FROM companies WHERE industry LIKE '%tech%' OR industry LIKE '%IT%' OR industry LIKE '%software%' ORDER BY employee_count DESC LIMIT 20"
-        return "SELECT name, industry, city, employee_count, revenue_estimate FROM companies ORDER BY created_at DESC LIMIT 20"
+            return "SELECT name, type, industry, employee_count, city FROM entities WHERE industry LIKE '%tech%' OR industry LIKE '%IT%' OR industry LIKE '%software%' ORDER BY employee_count DESC LIMIT 20"
+        return "SELECT name, type, industry, city, employee_count FROM entities ORDER BY created_at DESC LIMIT 20"
     }
     if (q.match(/news|article|headline/)) {
         const cats = { tech: 'technology', econom: 'economy', politi: 'politics', sport: 'sports', cultur: 'culture', health: 'health' }
@@ -256,45 +576,20 @@ function nlpToSQL(question) {
         }
         return "SELECT title, summary, source, category, published_date FROM news_articles ORDER BY published_date DESC LIMIT 20"
     }
-    if (q.match(/statistic|gdp|population|econom|indicator|unemploy|inflation/)) {
-        if (q.match(/city|region|yerevan|gyumri/))
-            return "SELECT region, indicator, value, unit, period FROM statistics WHERE region IS NOT NULL ORDER BY period DESC LIMIT 30"
-        if (q.match(/gdp|gross/))
-            return "SELECT indicator, value, unit, period, region FROM statistics WHERE indicator LIKE '%GDP%' ORDER BY period DESC LIMIT 20"
-        return "SELECT category, indicator, value, unit, period, region FROM statistics ORDER BY created_at DESC LIMIT 30"
-    }
-    if (q.match(/social|follower|instagram|facebook/))
-        return "SELECT c.name, sm.platform, sm.followers_count, sm.engagement_rate FROM companies c JOIN social_metrics sm ON c.id = sm.company_id ORDER BY sm.followers_count DESC LIMIT 20"
-    if (q.match(/trend|market|growth/))
-        return "SELECT industry, trend_name, trend_score, description FROM market_trends ORDER BY trend_score DESC LIMIT 20"
-    if (q.match(/contact|person|ceo|founder/))
-        return "SELECT ct.first_name, ct.last_name, ct.position, c.name AS company FROM contacts ct LEFT JOIN companies c ON ct.company_id = c.id LIMIT 20"
-    return `SELECT 'companies' AS table_name, COUNT(*) AS total_rows FROM companies
-            UNION ALL SELECT 'news_articles', COUNT(*) FROM news_articles
-            UNION ALL SELECT 'statistics', COUNT(*) FROM statistics`
-}
+    if (q.match(/population|demographic/))
+        return "SELECT entity, attribute, value_num, unit, period, location FROM data_points WHERE domain='demographics' ORDER BY period DESC LIMIT 30"
+    if (q.match(/gdp|econom|growth/))
+        return "SELECT entity, attribute, value_num, unit, period FROM data_points WHERE domain='economy' ORDER BY period DESC LIMIT 30"
+    if (q.match(/exchange|rate|amd|usd|eur/))
+        return "SELECT base, target, rate, date FROM exchange_rates ORDER BY date DESC LIMIT 20"
+    if (q.match(/health|hospital|doctor|physician/))
+        return "SELECT attribute, value_num, unit, period FROM data_points WHERE domain='health' ORDER BY period DESC LIMIT 20"
+    if (q.match(/labor|employ|unemployment/))
+        return "SELECT attribute, value_num, unit, period FROM data_points WHERE domain='labor' ORDER BY period DESC LIMIT 20"
 
-function buildResponse(question, results) {
-    const n = results.length
-    const q = question.toLowerCase()
-    if (n === 0) return `No data found for your query. Try asking about companies, news, or statistics.`
-    if (q.match(/compan|business/)) return `Found ${n} compan${n === 1 ? 'y' : 'ies'} in the Armenian market database:`
-    if (q.match(/news|article/)) return `Here are ${n} recent Armenian news article${n === 1 ? '' : 's'}:`
-    if (q.match(/statistic|gdp|population/)) return `Retrieved ${n} statistical indicator${n === 1 ? '' : 's'} from Armenian sources:`
-    if (q.match(/trend/)) return `Found ${n} market trend${n === 1 ? '' : 's'} in Armenia:`
-    return `Found ${n} result${n === 1 ? '' : 's'} for your query:`
-}
-
-function detectChart(results) {
-    if (!results || results.length < 2) return null
-    const cols = Object.keys(results[0])
-    const labelCols = ['label', 'name', 'industry', 'category', 'region', 'platform', 'type', 'table_name']
-    const valueCols = ['value', 'count', 'total_rows', 'company_count', 'revenue_estimate', 'followers_count', 'trend_score', 'avg_revenue']
-    const labelCol = cols.find(c => labelCols.includes(c))
-    const valueCol = cols.find(c => valueCols.includes(c))
-    if (!labelCol || !valueCol) return null
-    const isPie = results.length <= 10 && cols.length === 2
-    return { type: isPie ? 'pie' : 'bar', labelColumn: labelCol, dataColumns: [valueCol] }
+    return `SELECT 'data_points' AS tbl, COUNT(*) AS n FROM data_points
+            UNION ALL SELECT 'entities', COUNT(*) FROM entities
+            UNION ALL SELECT 'news_articles', COUNT(*) FROM news_articles`
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -335,7 +630,6 @@ app.post('/auth/login', async (c) => {
     const { email, password } = await c.req.json()
     if (!email || !password) return c.json({ success: false, error: 'Email and password are required' }, 400)
 
-    // Rate limit: 10 attempts per 15 min per IP
     const allowed = await checkRateLimit(DB, `login:${ip}`, { windowMs: 900_000, max: 10 })
     if (!allowed) return c.json({ success: false, error: 'Too many login attempts. Try again later.' }, 429)
 
@@ -349,7 +643,6 @@ app.post('/auth/login', async (c) => {
             return c.json({ success: false, error: 'Invalid email or password' }, 401)
         }
 
-        // Check 2FA
         const totp = await DB.prepare('SELECT secret_b32, enabled FROM user_totp WHERE user_id = ?').bind(user.id).first()
         if (totp?.enabled) {
             const partialToken = await signJWT({ id: user.id, temp: true }, getSecret(c.env), 300)
@@ -379,7 +672,6 @@ app.get('/auth/me', (c) => requireAuth(c, async () => {
 // ROUTES — 2FA / TOTP
 // ─────────────────────────────────────────────────────────────
 
-// Step 2 of login: validate TOTP with partial token
 app.post('/auth/2fa/validate', async (c) => {
     const { DB } = c.env
     const ip = getIp(c), ua = getUa(c)
@@ -388,15 +680,12 @@ app.post('/auth/2fa/validate', async (c) => {
     try {
         const payload = await verifyJWT(partial_token, getSecret(c.env))
         if (!payload.temp) return c.json({ success: false, error: 'Invalid token type' }, 400)
-
         const totp = await DB.prepare('SELECT secret_b32 FROM user_totp WHERE user_id = ? AND enabled = 1').bind(payload.id).first()
         if (!totp) return c.json({ success: false, error: '2FA not configured' }, 400)
-
         if (!(await verifyTOTP(totp.secret_b32, code))) {
             await audit(DB, { userId: payload.id, action: 'totp_failed', ip, ua, severity: 'warn' })
             return c.json({ success: false, error: 'Invalid 2FA code' }, 401)
         }
-
         const user = await DB.prepare('SELECT id, email, full_name, role FROM users WHERE id = ?').bind(payload.id).first()
         await DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(payload.id).run()
         const token = await signJWT({ id: user.id, email: user.email, role: user.role }, getSecret(c.env))
@@ -407,7 +696,6 @@ app.post('/auth/2fa/validate', async (c) => {
     }
 })
 
-// Setup TOTP: generate secret, store (disabled until confirmed)
 app.post('/auth/2fa/setup', (c) => requireAuth(c, async () => {
     const user = c.get('user')
     const secret = base32Encode(crypto.getRandomValues(new Uint8Array(20)))
@@ -418,7 +706,6 @@ app.post('/auth/2fa/setup', (c) => requireAuth(c, async () => {
     return c.json({ success: true, secret, uri, qr: `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(uri)}&size=200x200` })
 }))
 
-// Enable TOTP: verify code then activate
 app.post('/auth/2fa/enable', (c) => requireAuth(c, async () => {
     const { code } = await c.req.json()
     if (!code) return c.json({ success: false, error: 'code required' }, 400)
@@ -430,7 +717,6 @@ app.post('/auth/2fa/enable', (c) => requireAuth(c, async () => {
     return c.json({ success: true, message: '2FA enabled' })
 }))
 
-// Disable TOTP
 app.post('/auth/2fa/disable', (c) => requireAuth(c, async () => {
     const { code } = await c.req.json()
     if (!code) return c.json({ success: false, error: 'code required' }, 400)
@@ -443,61 +729,154 @@ app.post('/auth/2fa/disable', (c) => requireAuth(c, async () => {
 }))
 
 // ─────────────────────────────────────────────────────────────
-// ROUTES — CHAT
+// ROUTES — CHAT (3-step AI pipeline with query cache)
 // ─────────────────────────────────────────────────────────────
 
 app.post('/chat', (c) => requireAuth(c, async () => {
-    const { DB, OPENAI_API_KEY } = c.env
+    const { DB, OPENAI_API_KEY, BRAVE_API_KEY } = c.env
     const user = c.get('user')
-    const ip = getIp(c)
+    const ip   = getIp(c)
     const { message, sessionId = crypto.randomUUID() } = await c.req.json()
     if (!message) return c.json({ error: 'Message is required' }, 400)
 
-    // Rate limit: 60 messages/min per user
     const allowed = await checkRateLimit(DB, `chat:${user.id}`, { windowMs: 60_000, max: 60 })
     if (!allowed) return c.json({ success: false, error: 'Too many requests' }, 429)
 
-    // SQL injection check on user message
     const sqli = detectSQLi(message)
     if (sqli.isInjection) {
         await audit(DB, { userId: user.id, action: 'sqli_attempt', ip, metadata: { findings: sqli.findings, message }, severity: 'critical' })
-        return c.json({ success: false, response: "I detected potentially malicious input in your message." })
+        return c.json({ success: false, response: 'I detected potentially malicious input in your message.' })
     }
 
-    const sql = nlpToSQL(message)
+    let sql = null
+    let sqlSource = 'keyword'
     let results = []
-    try {
-        const { results: rows } = await DB.prepare(sql).all()
-        results = rows || []
-    } catch (e) { console.error('SQL exec:', e) }
+    let researched = false
+    let researchDomain = null
 
-    let response = buildResponse(message, results)
-    if (OPENAI_API_KEY && results.length > 0) {
+    // ── Step 0: Query cache check ────────────────────────────
+    const cache = await cacheCheck(DB, message)
+
+    if (cache.hit !== 'none' && cache.entry?.sql_generated) {
+        // Cache hit: run the stored SQL directly
+        sql = cache.entry.sql_generated
+        sqlSource = `cache_${cache.hit}`
         try {
-            const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-                body: JSON.stringify({
-                    model: 'gpt-4o-mini',
-                    messages: [
-                        { role: 'system', content: 'You are a concise Armenian market analytics assistant. Answer in 2-3 sentences.' },
-                        { role: 'user', content: `Question: ${message}\nData: ${JSON.stringify(results.slice(0, 8))}\nAnswer briefly.` }
-                    ],
-                    max_tokens: 250, temperature: 0.7
-                })
-            })
-            const ai = await aiRes.json()
-            if (ai.choices?.[0]?.message?.content) response = ai.choices[0].message.content
-        } catch (e) { console.error('AI:', e) }
+            const { results: rows } = await DB.prepare(sql).all()
+            results = rows || []
+        } catch { /* cached SQL failed, fall through */ }
     }
 
-    const chart = detectChart(results)
-    await DB.prepare(
-        'INSERT INTO chat_history (session_id, user_id, user_message, generated_sql, result_count, assistant_response) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(sessionId, user.id, message, sql, results.length, response).run()
-    await audit(DB, { userId: user.id, action: 'query', ip, metadata: { sessionId, resultCount: results.length } })
+    // ── Step 1: Introspect live catalog ──────────────────────
+    if (!results.length && OPENAI_API_KEY) {
+        try {
+            const schema = await buildDynamicSchema(DB)
 
-    return c.json({ success: true, message, response, data: results, dataCount: results.length, chart, sql, sessionId })
+            // ── Step 2: AI plans — returns SQL or NEEDS_RESEARCH ─
+            const plan = await aiPlan(message, schema, OPENAI_API_KEY)
+
+            if (plan === 'NEEDS_RESEARCH') {
+                // ── Step 3a: Research is required ────────────────
+                if (BRAVE_API_KEY) {
+                    try {
+                        const res = await researchQuestion(message, DB, OPENAI_API_KEY, BRAVE_API_KEY)
+                        if (res?.rows?.length) {
+                            researched = true
+                            researchDomain = res.domain
+                            // Re-introspect now that data is stored, generate SQL
+                            const freshSchema = await buildDynamicSchema(DB)
+                            const freshSql = await aiPlan(message, freshSchema, OPENAI_API_KEY)
+                            if (isSafeSQL(freshSql)) {
+                                sql = freshSql
+                                sqlSource = 'ai_research'
+                                const { results: rows } = await DB.prepare(sql).all()
+                                results = rows?.length ? rows : res.rows
+                            } else {
+                                results = res.rows
+                                sqlSource = 'research_direct'
+                            }
+                        }
+                    } catch (e) { console.error('research:', e.message) }
+                }
+            } else if (isSafeSQL(plan)) {
+                // ── Step 3b: Execute AI-generated SQL ────────────
+                sql = plan
+                sqlSource = 'ai'
+                try {
+                    const { results: rows } = await DB.prepare(sql).all()
+                    results = rows || []
+
+                    // If DB returned nothing, still try research
+                    if (!results.length && BRAVE_API_KEY) {
+                        try {
+                            const res = await researchQuestion(message, DB, OPENAI_API_KEY, BRAVE_API_KEY)
+                            if (res?.rows?.length) {
+                                researched = true
+                                researchDomain = res.domain
+                                const freshSchema = await buildDynamicSchema(DB)
+                                const freshSql = await aiPlan(message, freshSchema, OPENAI_API_KEY)
+                                if (isSafeSQL(freshSql)) {
+                                    const { results: freshRows } = await DB.prepare(freshSql).all()
+                                    if (freshRows.length) { results = freshRows; sql = freshSql; sqlSource = 'ai_research' }
+                                }
+                                if (!results.length) results = res.rows
+                            }
+                        } catch (e) { console.error('research fallback:', e.message) }
+                    }
+                } catch {
+                    // AI SQL failed — fallback to keyword
+                    sql = nlpToSQL(message)
+                    sqlSource = 'keyword_fallback'
+                    try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
+                }
+            }
+        } catch (e) { console.error('AI pipeline:', e.message) }
+    }
+
+    // ── Keyword fallback if nothing worked ───────────────────
+    if (!results.length && !sql) {
+        sql = nlpToSQL(message)
+        sqlSource = 'keyword'
+        try { const { results: rows } = await DB.prepare(sql).all(); results = rows || [] } catch { /* give up */ }
+    }
+
+    // ── AI interprets results ────────────────────────────────
+    let response = results.length
+        ? `Found ${results.length} result${results.length === 1 ? '' : 's'} for your query.`
+        : 'I searched the database and the web but could not find reliable data for this topic about Armenia. Try rephrasing your question.'
+
+    if (OPENAI_API_KEY && results.length) {
+        try {
+            const note = researched ? '[Note: Data was fetched from the web and stored for future queries.]\n' : ''
+            const interpreted = await aiInterpret(message, sql || '', results, OPENAI_API_KEY, note)
+            if (interpreted) response = interpreted
+        } catch (e) { console.error('aiInterpret:', e.message) }
+    }
+
+    // ── Store in query cache ─────────────────────────────────
+    if (cache.hit === 'none') {
+        await cacheStore(DB, {
+            hash: cache.hash,
+            slug: cache.slug,
+            original_query: message,
+            sql_generated: sql,
+            data_domain: researchDomain,
+            result_count: results.length,
+            researched,
+        })
+    }
+
+    await DB.prepare(
+        'INSERT INTO chat_history (session_id, user_id, user_message, generated_sql, result_count, assistant_response) VALUES (?,?,?,?,?,?)'
+    ).bind(sessionId, user.id, message, sql, results.length, response).run()
+    await audit(DB, { userId: user.id, action: 'query', ip, metadata: { sessionId, resultCount: results.length, sqlSource, researched } })
+
+    return c.json({
+        success: true, message, response,
+        data: results, dataCount: results.length,
+        sql, sqlSource, researched,
+        sessionId,
+    })
 }))
 
 app.get('/chat/history/:sessionId', (c) => requireAuth(c, async () => {
@@ -520,7 +899,43 @@ app.get('/chat/sessions', (c) => requireAuth(c, async () => {
 }))
 
 // ─────────────────────────────────────────────────────────────
-// ROUTES — SQL EDITOR
+// ROUTES — ON-DEMAND RESEARCH
+// ─────────────────────────────────────────────────────────────
+
+app.post('/research', (c) => requireAuth(c, async () => {
+    const { DB, OPENAI_API_KEY, BRAVE_API_KEY } = c.env
+    const user = c.get('user')
+    const ip = getIp(c)
+
+    if (!BRAVE_API_KEY) return c.json({ success: false, error: 'BRAVE_API_KEY not configured' }, 503)
+    if (!OPENAI_API_KEY) return c.json({ success: false, error: 'OPENAI_API_KEY not configured' }, 503)
+
+    const { question } = await c.req.json()
+    if (!question?.trim()) return c.json({ success: false, error: 'question is required' }, 400)
+
+    const allowed = await checkRateLimit(DB, `research:${user.id}`, { windowMs: 60_000, max: 5 })
+    if (!allowed) return c.json({ success: false, error: 'Too many research requests. Max 5/minute.' }, 429)
+
+    const result = await researchQuestion(question, DB, OPENAI_API_KEY, BRAVE_API_KEY)
+
+    await audit(DB, {
+        userId: user.id, action: 'research', ip,
+        metadata: { question, rowsFound: result?.rows?.length ?? 0, domain: result?.domain }
+    })
+
+    if (!result) return c.json({ success: false, message: 'No data found for this question.' })
+
+    return c.json({
+        success: true, question,
+        domain: result.domain, category: result.category,
+        rowsFound: result.rows.length,
+        data: result.rows,
+        message: `Researched and stored ${result.rows.length} data points (domain: ${result.domain}).`,
+    })
+}))
+
+// ─────────────────────────────────────────────────────────────
+// ROUTES — SQL EDITOR (restricted to data tables)
 // ─────────────────────────────────────────────────────────────
 
 app.post('/sql/execute', (c) => requireAuth(c, async () => {
@@ -529,34 +944,26 @@ app.post('/sql/execute', (c) => requireAuth(c, async () => {
     const { sql } = await c.req.json()
     if (!sql?.trim()) return c.json({ success: false, error: 'SQL is required' }, 400)
 
-    // Rate limit: 20 queries/min
     const allowed = await checkRateLimit(c.env.DB, `sql:${user.id}`, { windowMs: 60_000, max: 20 })
     if (!allowed) return c.json({ success: false, error: 'Too many requests' }, 429)
 
-    // SQLi detection
     const sqli = detectSQLi(sql)
     if (sqli.isInjection) {
         await audit(c.env.DB, { userId: user.id, action: 'sqli_attempt', ip, metadata: { findings: sqli.findings }, severity: 'critical' })
         return c.json({ success: false, error: 'Potentially malicious SQL detected' }, 400)
     }
 
-    // Blocklist write operations
     const upper = sql.trim().toUpperCase()
     const blocked = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'REPLACE', 'PRAGMA']
-    if (blocked.some(k => upper.startsWith(k) || upper.includes(` ${k} `))) {
+    if (blocked.some(k => upper.startsWith(k) || upper.includes(` ${k} `)))
         return c.json({ success: false, error: 'Only SELECT queries are allowed' }, 400)
-    }
 
-    // Blocklist private/system tables — only data-platform tables are queryable
-    const PRIVATE_TABLES = ['users', 'sessions', 'audit_log', 'ip_rules', 'anomalies', 'totp_secrets', 'rate_limits', 'scraper_jobs']
-    const mentionedPrivate = PRIVATE_TABLES.filter(t => {
-        // Match whole-word table name (not as a substring of another word)
-        const re = new RegExp(`(?<![\\w])${t}(?![\\w])`, 'i')
-        return re.test(sql)
-    })
+    // Block internal/system tables — data tables (data_points, entities, news_*, exchange_rates) are queryable
+    const PRIVATE = ['users', 'sessions', 'audit_log', 'ip_rules', 'anomalies', 'totp_secrets', 'rate_limits', 'scraper_jobs', 'chat_history', 'threat_cache', 'anomaly_events', 'rate_limit_log', 'user_totp', 'query_cache']
+    const mentionedPrivate = PRIVATE.filter(t => new RegExp(`(?<![\\w])${t}(?![\\w])`, 'i').test(sql))
     if (mentionedPrivate.length > 0) {
         await audit(c.env.DB, { userId: user.id, action: 'sql_blocked_private_table', ip, metadata: { tables: mentionedPrivate, sql: sql.slice(0, 200) }, severity: 'high' })
-        return c.json({ success: false, error: `Access denied: table(s) [${mentionedPrivate.join(', ')}] are restricted. Queryable tables: companies, news_articles, statistics, market_trends.` }, 403)
+        return c.json({ success: false, error: `Access denied: [${mentionedPrivate.join(', ')}] are restricted. Queryable: data_points, entities, news_articles, exchange_rates.` }, 403)
     }
 
     try {
@@ -570,86 +977,58 @@ app.post('/sql/execute', (c) => requireAuth(c, async () => {
 }))
 
 // ─────────────────────────────────────────────────────────────
-// ROUTES — DATA
+// ROUTES — DATA SUMMARY
 // ─────────────────────────────────────────────────────────────
 
 app.get('/data/summary', (c) => requireAuth(c, async () => {
     const DB = c.env.DB
-    const [companies, news, stats, jobs] = await Promise.all([
-        DB.prepare('SELECT COUNT(*) AS n FROM companies').first(),
+    const [dpRow, entRow, newsRow, jobsRow] = await Promise.all([
+        DB.prepare('SELECT COUNT(*) AS n FROM data_points').first(),
+        DB.prepare('SELECT COUNT(*) AS n FROM entities').first(),
         DB.prepare('SELECT COUNT(*) AS n FROM news_articles').first(),
-        DB.prepare('SELECT COUNT(*) AS n FROM statistics').first(),
-        DB.prepare("SELECT COUNT(*) AS n FROM scraper_jobs WHERE status = 'completed'").first()
+        DB.prepare("SELECT COUNT(*) AS n FROM scraper_jobs WHERE status='completed'").first(),
     ])
-    const recentNews = await DB.prepare('SELECT title, source, published_date FROM news_articles ORDER BY published_date DESC LIMIT 5').all()
+    const { results: domainBreakdown } = await DB.prepare(
+        'SELECT domain, COUNT(*) as n FROM data_points GROUP BY domain ORDER BY n DESC'
+    ).all()
+    const { results: recentNews } = await DB.prepare(
+        'SELECT title, source, published_date FROM news_articles ORDER BY published_date DESC LIMIT 5'
+    ).all()
     return c.json({
         success: true,
-        summary: { companies: companies?.n || 0, news_articles: news?.n || 0, statistics: stats?.n || 0, scraper_jobs_completed: jobs?.n || 0 },
-        recentNews: recentNews.results || []
+        summary: {
+            data_points: dpRow?.n || 0,
+            entities: entRow?.n || 0,
+            news_articles: newsRow?.n || 0,
+            scraper_jobs_completed: jobsRow?.n || 0,
+        },
+        domainBreakdown: domainBreakdown || [],
+        recentNews: recentNews || [],
     })
 }))
 
-app.get('/data/companies', (c) => requireAuth(c, async () => {
-    const industry = c.req.query('industry')
+app.get('/data/entities', (c) => requireAuth(c, async () => {
+    const type = c.req.query('type')
     const limit = Math.min(parseInt(c.req.query('limit') || '50'), 100)
-    const { results } = industry
-        ? await c.env.DB.prepare('SELECT * FROM companies WHERE industry LIKE ? ORDER BY name LIMIT ?').bind(`%${industry}%`, limit).all()
-        : await c.env.DB.prepare('SELECT * FROM companies ORDER BY created_at DESC LIMIT ?').bind(limit).all()
-    return c.json({ success: true, companies: results })
+    const { results } = type
+        ? await c.env.DB.prepare('SELECT * FROM entities WHERE type = ? ORDER BY name LIMIT ?').bind(type, limit).all()
+        : await c.env.DB.prepare('SELECT * FROM entities ORDER BY created_at DESC LIMIT ?').bind(limit).all()
+    return c.json({ success: true, entities: results })
 }))
 
-app.get('/data/statistics', (c) => requireAuth(c, async () => {
+app.get('/data/datapoints', (c) => requireAuth(c, async () => {
+    const domain = c.req.query('domain')
     const limit = Math.min(parseInt(c.req.query('limit') || '50'), 100)
-    const { results } = await c.env.DB.prepare('SELECT * FROM statistics ORDER BY created_at DESC LIMIT ?').bind(limit).all()
-    return c.json({ success: true, statistics: results })
-}))
-
-// Network graph data
-app.get('/data/graph', (c) => requireAuth(c, async () => {
-    const DB = c.env.DB
-    const { results: companies } = await DB.prepare(
-        'SELECT id, name, industry, city, employee_count, revenue_estimate, website, founded_date FROM companies ORDER BY employee_count DESC LIMIT 80'
-    ).all()
-
-    const nodes = companies.map(co => ({
-        id: co.id,
-        name: co.name,
-        group: co.industry || 'Other',
-        city: co.city || 'Yerevan',
-        size: Math.max(8, Math.min(28, Math.sqrt(co.employee_count || 100))),
-        employee_count: co.employee_count,
-        revenue_estimate: co.revenue_estimate,
-        website: co.website,
-        founded_date: co.founded_date,
-    }))
-
-    // Build edges: same industry (weight 2) or same city (weight 1)
-    const edges = []
-    for (let i = 0; i < companies.length; i++) {
-        for (let j = i + 1; j < companies.length; j++) {
-            const a = companies[i], b = companies[j]
-            if (a.industry && a.industry === b.industry) {
-                edges.push({ source: a.id, target: b.id, type: 'same_industry', weight: 2 })
-            } else if (a.city && a.city === b.city) {
-                edges.push({ source: a.id, target: b.id, type: 'same_city', weight: 1 })
-            }
-        }
-    }
-
-    // Also get explicit relationships if they exist
-    try {
-        const { results: rels } = await DB.prepare('SELECT source_id, target_id, relationship, weight FROM company_relationships').all()
-        rels.forEach(r => edges.push({ source: r.source_id, target: r.target_id, type: r.relationship, weight: r.weight }))
-    } catch { /* table may not exist yet */ }
-
-    return c.json({ success: true, nodes, edges })
+    const { results } = domain
+        ? await c.env.DB.prepare('SELECT * FROM data_points WHERE domain = ? ORDER BY created_at DESC LIMIT ?').bind(domain, limit).all()
+        : await c.env.DB.prepare('SELECT * FROM data_points ORDER BY created_at DESC LIMIT ?').bind(limit).all()
+    return c.json({ success: true, data_points: results })
 }))
 
 // ─────────────────────────────────────────────────────────────
 // ROUTES — SECURITY (admin + self-serve)
 // ─────────────────────────────────────────────────────────────
 
-// ── Audit Log ────────────────────────────────────────────────
 app.get('/security/audit-log', (c) => requireAdmin(c, async () => {
     const limit = Math.min(parseInt(c.req.query('limit') || '100'), 500)
     const action = c.req.query('action')
@@ -666,7 +1045,6 @@ app.get('/security/audit-log', (c) => requireAdmin(c, async () => {
     return c.json({ success: true, logs: results })
 }))
 
-// ── IP Rules ─────────────────────────────────────────────────
 app.get('/security/ip-rules', (c) => requireAdmin(c, async () => {
     const { results } = await c.env.DB.prepare('SELECT * FROM ip_rules ORDER BY created_at DESC').all()
     return c.json({ success: true, rules: results })
@@ -674,9 +1052,8 @@ app.get('/security/ip-rules', (c) => requireAdmin(c, async () => {
 
 app.post('/security/ip-rules', (c) => requireAdmin(c, async () => {
     const { ip_or_cidr, rule_type, note } = await c.req.json()
-    if (!ip_or_cidr || !['allow', 'deny'].includes(rule_type)) {
+    if (!ip_or_cidr || !['allow', 'deny'].includes(rule_type))
         return c.json({ success: false, error: 'ip_or_cidr and rule_type (allow|deny) required' }, 400)
-    }
     try {
         await c.env.DB.prepare(
             'INSERT INTO ip_rules (ip_or_cidr, rule_type, note, created_by) VALUES (?, ?, ?, ?)'
@@ -692,47 +1069,34 @@ app.delete('/security/ip-rules/:id', (c) => requireAdmin(c, async () => {
     return c.json({ success: true })
 }))
 
-// ── Anomaly Detection ─────────────────────────────────────────
 app.get('/security/anomalies', (c) => requireAuth(c, async () => {
     const DB = c.env.DB
     const w15m = new Date(Date.now() - 15 * 60_000).toISOString()
     const w1h  = new Date(Date.now() - 60 * 60_000).toISOString()
     const w24h = new Date(Date.now() - 24 * 60 * 60_000).toISOString()
 
-    // Detect brute force: >5 failed logins from same IP in 15min
     const { results: bf } = await DB.prepare(
         "SELECT ip, COUNT(*) AS n FROM audit_log WHERE action='failed_login' AND created_at > ? GROUP BY ip HAVING n > 5"
     ).bind(w15m).all()
-
-    // Scraper failures in last 24h
     const { results: sf } = await DB.prepare(
-        "SELECT source_name, error_message, created_at FROM scraper_jobs WHERE status='failed' AND created_at > ? ORDER BY created_at DESC LIMIT 10"
+        "SELECT source, error_msg, started_at FROM scraper_jobs WHERE status='failed' AND started_at > ? ORDER BY started_at DESC LIMIT 10"
     ).bind(w24h).all()
-
-    // SQL injection attempts in last hour
     const { results: sqli } = await DB.prepare(
         "SELECT user_id, metadata, created_at FROM audit_log WHERE action='sqli_attempt' AND created_at > ? ORDER BY created_at DESC"
     ).bind(w1h).all()
 
-    // Save anomaly events
     const inserts = []
-    for (const row of bf) {
-        inserts.push(DB.prepare(
-            "INSERT OR IGNORE INTO anomaly_events (event_type, target, details, severity) VALUES ('brute_force', ?, ?, 'high')"
-        ).bind(row.ip, JSON.stringify(row)))
-    }
-    for (const row of sqli) {
-        inserts.push(DB.prepare(
-            "INSERT OR IGNORE INTO anomaly_events (event_type, target, details, severity) VALUES ('sqli_attempt', ?, ?, 'critical')"
-        ).bind(String(row.user_id), JSON.stringify(row)))
-    }
+    for (const row of bf) inserts.push(DB.prepare(
+        "INSERT OR IGNORE INTO anomaly_events (event_type, target, details, severity) VALUES ('brute_force', ?, ?, 'high')"
+    ).bind(row.ip, JSON.stringify(row)))
+    for (const row of sqli) inserts.push(DB.prepare(
+        "INSERT OR IGNORE INTO anomaly_events (event_type, target, details, severity) VALUES ('sqli_attempt', ?, ?, 'critical')"
+    ).bind(String(row.user_id), JSON.stringify(row)))
     if (inserts.length) await DB.batch(inserts)
 
-    // Return unresolved events
     const { results: events } = await DB.prepare(
         'SELECT * FROM anomaly_events WHERE resolved = 0 ORDER BY created_at DESC LIMIT 50'
     ).all()
-
     return c.json({ success: true, events, signals: { brute_force: bf, scraper_failures: sf, sqli_attempts: sqli } })
 }))
 
@@ -741,148 +1105,28 @@ app.post('/security/anomalies/:id/resolve', (c) => requireAdmin(c, async () => {
     return c.json({ success: true })
 }))
 
-// ── Threat Intel: Domain Reputation (VirusTotal v3) ──────────
-app.get('/security/intel/domain/:domain', (c) => requireAuth(c, async () => {
-    const domain = c.req.param('domain').toLowerCase()
-    if (!c.env.VIRUSTOTAL_API_KEY) return c.json({ success: false, error: 'VirusTotal API key not configured' }, 503)
-
-    const cacheKey = await sha256Hex('vt:' + domain)
-    const cached = await c.env.DB.prepare(
-        "SELECT result, queried_at FROM threat_cache WHERE type='virustotal' AND query_key=?"
-    ).bind(cacheKey).first()
-    if (cached) {
-        const age = Date.now() - new Date(cached.queried_at).getTime()
-        if (age < 3_600_000) return c.json({ success: true, cached: true, data: JSON.parse(cached.result) })
-    }
-
-    const vt = await fetch(`https://www.virustotal.com/api/v3/domains/${encodeURIComponent(domain)}`, {
-        headers: { 'x-apikey': c.env.VIRUSTOTAL_API_KEY }
-    })
-    if (!vt.ok) return c.json({ success: false, error: `VirusTotal returned ${vt.status}` }, 502)
-    const vtData = await vt.json()
-    const attrs = vtData.data?.attributes ?? {}
-    const stats = attrs.last_analysis_stats ?? {}
-
-    const result = {
-        domain,
-        malicious: stats.malicious ?? 0,
-        suspicious: stats.suspicious ?? 0,
-        harmless: stats.harmless ?? 0,
-        undetected: stats.undetected ?? 0,
-        reputation: attrs.reputation ?? 0,
-        categories: attrs.categories ?? {},
-        risk_score: Math.min(100, ((stats.malicious ?? 0) * 5 + (stats.suspicious ?? 0) * 2)),
-        scanned_at: new Date().toISOString()
-    }
-
-    await c.env.DB.prepare(
-        "INSERT INTO threat_cache (type, query_key, result) VALUES (?,?,?) ON CONFLICT(type,query_key) DO UPDATE SET result=excluded.result, queried_at=CURRENT_TIMESTAMP"
-    ).bind('virustotal', cacheKey, JSON.stringify(result)).run()
-
-    await audit(c.env.DB, { userId: c.get('user').id, action: 'domain_check', ip: getIp(c), metadata: { domain } })
-    return c.json({ success: true, cached: false, data: result })
-}))
-
-// ── Threat Intel: Breach Check (HaveIBeenPwned v3) ───────────
-app.get('/security/intel/breach/:email', (c) => requireAuth(c, async () => {
-    const email = c.req.param('email').toLowerCase()
-    if (!c.env.HIBP_API_KEY) return c.json({ success: false, error: 'HIBP API key not configured' }, 503)
-
-    const cacheKey = await sha256Hex('hibp:' + email)
-    const cached = await c.env.DB.prepare(
-        "SELECT result, queried_at FROM threat_cache WHERE type='hibp' AND query_key=?"
-    ).bind(cacheKey).first()
-    if (cached) {
-        const age = Date.now() - new Date(cached.queried_at).getTime()
-        if (age < 86_400_000) return c.json({ success: true, cached: true, data: JSON.parse(cached.result) })
-    }
-
-    const hibp = await fetch(
-        `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=false`,
-        { headers: { 'hibp-api-key': c.env.HIBP_API_KEY, 'User-Agent': 'ArmenianOSINT/1.0' } }
-    )
-
-    let result
-    if (hibp.status === 404) {
-        result = { email, breach_count: 0, breaches: [] }
-    } else if (!hibp.ok) {
-        return c.json({ success: false, error: `HIBP returned ${hibp.status}` }, 502)
-    } else {
-        const data = await hibp.json()
-        result = {
-            email,
-            breach_count: data.length,
-            breaches: data.map(b => ({ name: b.Name, domain: b.Domain, date: b.BreachDate, classes: b.DataClasses, verified: b.IsVerified }))
-        }
-    }
-
-    await c.env.DB.prepare(
-        "INSERT INTO threat_cache (type, query_key, result) VALUES (?,?,?) ON CONFLICT(type,query_key) DO UPDATE SET result=excluded.result, queried_at=CURRENT_TIMESTAMP"
-    ).bind('hibp', cacheKey, JSON.stringify(result)).run()
-
-    await audit(c.env.DB, { userId: c.get('user').id, action: 'breach_check', ip: getIp(c) })
-    return c.json({ success: true, cached: false, data: result })
-}))
-
-// ── Online Exposure (combines domain + breach + paste check) ──
-app.get('/security/intel/exposure/:email', (c) => requireAuth(c, async () => {
-    const email = c.req.param('email').toLowerCase()
-    const domain = email.split('@')[1] || ''
-    const results = { email, domain, breach_count: 0, paste_count: 0, domain_malicious: 0, risk_score: 0, risk_level: 'low', checks: [] }
-
-    if (c.env.HIBP_API_KEY) {
-        try {
-            const r = await fetch(`https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=true`,
-                { headers: { 'hibp-api-key': c.env.HIBP_API_KEY, 'User-Agent': 'ArmenianOSINT/1.0' } })
-            if (r.ok) { const d = await r.json(); results.breach_count = d.length }
-            const p = await fetch(`https://haveibeenpwned.com/api/v3/pasteaccount/${encodeURIComponent(email)}`,
-                { headers: { 'hibp-api-key': c.env.HIBP_API_KEY, 'User-Agent': 'ArmenianOSINT/1.0' } })
-            if (p.ok) { const d = await p.json(); results.paste_count = d.length }
-        } catch { /* ignore */ }
-    }
-
-    if (c.env.VIRUSTOTAL_API_KEY && domain) {
-        try {
-            const r = await fetch(`https://www.virustotal.com/api/v3/domains/${domain}`,
-                { headers: { 'x-apikey': c.env.VIRUSTOTAL_API_KEY } })
-            if (r.ok) { const d = await r.json(); results.domain_malicious = d.data?.attributes?.last_analysis_stats?.malicious ?? 0 }
-        } catch { /* ignore */ }
-    }
-
-    results.risk_score = Math.min(100,
-        Math.min(results.breach_count * 15, 60) +
-        Math.min(results.paste_count * 10, 20) +
-        (results.domain_malicious > 0 ? 20 : 0)
-    )
-    results.risk_level = results.risk_score >= 70 ? 'critical' : results.risk_score >= 40 ? 'high' : results.risk_score >= 20 ? 'medium' : 'low'
-
-    return c.json({ success: true, data: results })
-}))
-
 // ─────────────────────────────────────────────────────────────
 // GOOGLE OAUTH 2.0
 // ─────────────────────────────────────────────────────────────
 
-// GET /auth/google  →  redirect to Google consent screen
 app.get('/auth/google', (c) => {
     const clientId = c.env.GOOGLE_CLIENT_ID
     if (!clientId) {
         const origin = new URL(c.req.url).origin
-        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google SSO not configured. Set GOOGLE_CLIENT_ID secret.')}`, 302)
+        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google SSO not configured.')}`, 302)
     }
     const origin      = new URL(c.req.url).origin
     const redirectUri = `${origin}/api/auth/google/callback`
     const url         = new URL('https://accounts.google.com/o/oauth2/v2/auth')
-    url.searchParams.set('client_id',     clientId)
-    url.searchParams.set('redirect_uri',  redirectUri)
+    url.searchParams.set('client_id', clientId)
+    url.searchParams.set('redirect_uri', redirectUri)
     url.searchParams.set('response_type', 'code')
-    url.searchParams.set('scope',         'openid email profile')
-    url.searchParams.set('access_type',   'online')
-    url.searchParams.set('prompt',        'select_account')
+    url.searchParams.set('scope', 'openid email profile')
+    url.searchParams.set('access_type', 'online')
+    url.searchParams.set('prompt', 'select_account')
     return Response.redirect(url.toString(), 302)
 })
 
-// GET /auth/google/callback  →  exchange code, find/create user, redirect with JWT
 app.get('/auth/google/callback', async (c) => {
     const origin       = new URL(c.req.url).origin
     const clientId     = c.env.GOOGLE_CLIENT_ID
@@ -890,30 +1134,23 @@ app.get('/auth/google/callback', async (c) => {
     const code         = c.req.query('code')
     const errParam     = c.req.query('error')
 
-    if (errParam || !code) {
-        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google login was cancelled.')}`, 302)
-    }
-    if (!clientId || !clientSecret) {
-        return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google OAuth not configured.')}`, 302)
-    }
+    if (errParam || !code) return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google login was cancelled.')}`, 302)
+    if (!clientId || !clientSecret) return Response.redirect(`${origin}/login?error=${encodeURIComponent('Google OAuth not configured.')}`, 302)
 
     const redirectUri = `${origin}/api/auth/google/callback`
-
-    // Exchange authorization code for tokens
     let tokens
     try {
         const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-            method:  'POST',
+            method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body:    new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' })
+            body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' })
         })
         tokens = await tokenRes.json()
         if (!tokens.access_token) throw new Error('No access token')
-    } catch (err) {
+    } catch {
         return Response.redirect(`${origin}/login?error=${encodeURIComponent('Failed to exchange Google token.')}`, 302)
     }
 
-    // Get user profile from Google
     let googleUser
     try {
         const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -927,33 +1164,28 @@ app.get('/auth/google/callback', async (c) => {
 
     const DB    = c.env.DB
     const email = googleUser.email.toLowerCase()
-
     try {
-        // Find existing user or create new one
         let user = await DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first()
-
         if (!user) {
-            const result = await DB.prepare(
+            user = await DB.prepare(
                 'INSERT INTO users (email, full_name, password_hash, role, is_active) VALUES (?,?,?,?,1) RETURNING *'
             ).bind(email, googleUser.name || email.split('@')[0], 'google-oauth', 'analyst').first()
-            user = result
         }
-
-        if (!user.is_active) {
-            return Response.redirect(`${origin}/login?error=${encodeURIComponent('Account is disabled.')}`, 302)
-        }
-
+        if (!user.is_active) return Response.redirect(`${origin}/login?error=${encodeURIComponent('Account is disabled.')}`, 302)
         await DB.prepare('UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?').bind(user.id).run()
-        await audit(DB, { userId: user.id, action: 'google_login', ip: c.req.header('CF-Connecting-IP') })
-
+        await audit(DB, { userId: user.id, action: 'google_login', ip: getIp(c) })
         const token = await signJWT({ id: user.id, email: user.email, role: user.role }, getSecret(c.env))
         return Response.redirect(`${origin}/login?token=${token}`, 302)
-    } catch (err) {
+    } catch {
         return Response.redirect(`${origin}/login?error=${encodeURIComponent('Authentication failed.')}`, 302)
     }
 })
 
-// GET  /admin/users          →  list all users (admin only)
+// ─────────────────────────────────────────────────────────────
+// ROUTES — ADMIN (requireAdmin middleware on every endpoint)
+// ─────────────────────────────────────────────────────────────
+
+// ── User management ──────────────────────────────────────────
 app.get('/admin/users', (c) => requireAdmin(c, async () => {
     const { results } = await c.env.DB.prepare(
         'SELECT id, email, full_name, role, is_active, last_login_at, created_at FROM users ORDER BY created_at DESC'
@@ -961,7 +1193,6 @@ app.get('/admin/users', (c) => requireAdmin(c, async () => {
     return c.json({ success: true, users: results })
 }))
 
-// POST /admin/users          →  create a user with any role (admin only)
 app.post('/admin/users', (c) => requireAdmin(c, async () => {
     const actor = c.get('user')
     const { email, password, full_name, role = 'user' } = await c.req.json()
@@ -980,7 +1211,6 @@ app.post('/admin/users', (c) => requireAdmin(c, async () => {
     }
 }))
 
-// PATCH /admin/users/:id     →  update role or active status (admin only)
 app.patch('/admin/users/:id', (c) => requireAdmin(c, async () => {
     const actor = c.get('user')
     const { id } = c.req.param()
@@ -999,23 +1229,232 @@ app.patch('/admin/users/:id', (c) => requireAdmin(c, async () => {
     return c.json({ success: true })
 }))
 
-// POST /auth/setup  →  first-run admin setup (only works with 0 users)
+// ── Observability ────────────────────────────────────────────
+app.get('/admin/stats', (c) => requireAdmin(c, async () => {
+    const DB = c.env.DB
+    const [dp, ent, news, qc, jobs, users] = await Promise.all([
+        DB.prepare('SELECT COUNT(*) AS n FROM data_points').first(),
+        DB.prepare('SELECT COUNT(*) AS n FROM entities').first(),
+        DB.prepare('SELECT COUNT(*) AS n FROM news_articles').first(),
+        DB.prepare('SELECT COUNT(*) AS n, SUM(hit_count) AS hits, SUM(researched) AS researched FROM query_cache').first(),
+        DB.prepare("SELECT status, COUNT(*) AS n FROM scraper_jobs GROUP BY status").all(),
+        DB.prepare('SELECT COUNT(*) AS n, SUM(CASE WHEN role=\'admin\' THEN 1 ELSE 0 END) AS admins FROM users').first(),
+    ])
+    const { results: domainCounts } = await DB.prepare(
+        'SELECT domain, COUNT(*) as n FROM data_points GROUP BY domain ORDER BY n DESC'
+    ).all()
+    const lastScrape = await DB.prepare(
+        "SELECT source, finished_at FROM scraper_jobs WHERE status='completed' ORDER BY finished_at DESC LIMIT 1"
+    ).first()
+    return c.json({
+        success: true,
+        stats: {
+            data_points: dp?.n || 0,
+            entities: ent?.n || 0,
+            news_articles: news?.n || 0,
+            query_cache: { total: qc?.n || 0, total_hits: qc?.hits || 0, researched: qc?.researched || 0 },
+            scraper_jobs: jobs.results || [],
+            users: { total: users?.n || 0, admins: users?.admins || 0 },
+            last_scrape: lastScrape || null,
+        },
+        domain_breakdown: domainCounts || [],
+    })
+}))
+
+app.get('/admin/logs/scraper', (c) => requireAdmin(c, async () => {
+    const limit  = Math.min(parseInt(c.req.query('limit') || '100'), 500)
+    const status = c.req.query('status')
+    let sql = 'SELECT * FROM scraper_jobs'
+    const binds = []
+    if (status) { sql += ' WHERE status = ?'; binds.push(status) }
+    sql += ' ORDER BY started_at DESC LIMIT ?'
+    binds.push(limit)
+    const { results } = await c.env.DB.prepare(sql).bind(...binds).all()
+    return c.json({ success: true, logs: results })
+}))
+
+app.get('/admin/logs/audit', (c) => requireAdmin(c, async () => {
+    const limit    = Math.min(parseInt(c.req.query('limit') || '100'), 500)
+    const action   = c.req.query('action')
+    const severity = c.req.query('severity')
+    const userId   = c.req.query('user_id')
+    let sql = 'SELECT al.*, u.email FROM audit_log al LEFT JOIN users u ON al.user_id = u.id'
+    const binds = []
+    const where = []
+    if (action)   { where.push('al.action = ?'); binds.push(action) }
+    if (severity) { where.push('al.severity = ?'); binds.push(severity) }
+    if (userId)   { where.push('al.user_id = ?'); binds.push(userId) }
+    if (where.length) sql += ' WHERE ' + where.join(' AND ')
+    sql += ' ORDER BY al.created_at DESC LIMIT ?'
+    binds.push(limit)
+    const { results } = await c.env.DB.prepare(sql).bind(...binds).all()
+    return c.json({ success: true, logs: results })
+}))
+
+// ── Unrestricted SQL editors (both DB access, all tables allowed) ─
+app.post('/admin/sql/public', (c) => requireAdmin(c, async () => {
+    const actor = c.get('user')
+    const { sql } = await c.req.json()
+    if (!sql?.trim()) return c.json({ success: false, error: 'SQL is required' }, 400)
+
+    const upper = sql.trim().toUpperCase()
+    // Only allow read operations in the editor for safety; admin can still run writes
+    // by removing this check — but we keep SELECT-only as default guard
+    const allowed = ['SELECT', 'WITH', 'EXPLAIN', 'PRAGMA']
+    if (!allowed.some(k => upper.startsWith(k)))
+        return c.json({ success: false, error: 'Only SELECT/EXPLAIN/PRAGMA queries allowed in the SQL editor' }, 400)
+
+    try {
+        const start = Date.now()
+        const { results } = await c.env.DB.prepare(sql).all()
+        await audit(c.env.DB, { userId: actor.id, action: 'admin_sql_public', ip: getIp(c), metadata: { sql: sql.slice(0, 300) }, severity: 'admin' })
+        return c.json({ success: true, results: results || [], executionTime: Date.now() - start })
+    } catch (e) {
+        return c.json({ success: false, error: e.message }, 400)
+    }
+}))
+
+// ── Query cache management ───────────────────────────────────
+app.get('/admin/cache', (c) => requireAdmin(c, async () => {
+    const { results } = await c.env.DB.prepare(
+        'SELECT id, slug, original_query, result_count, hit_count, researched, data_domain, last_hit_at, created_at FROM query_cache ORDER BY hit_count DESC LIMIT 100'
+    ).all()
+    return c.json({ success: true, cache: results })
+}))
+
+app.delete('/admin/cache/:id', (c) => requireAdmin(c, async () => {
+    await c.env.DB.prepare('DELETE FROM query_cache WHERE id = ?').bind(c.req.param('id')).run()
+    await audit(c.env.DB, { userId: c.get('user').id, action: 'admin_cache_delete', ip: getIp(c), metadata: { id: c.req.param('id') }, severity: 'medium' })
+    return c.json({ success: true })
+}))
+
+// ── Data management ──────────────────────────────────────────
+app.post('/admin/scrape', (c) => requireAdmin(c, async () => {
+    const scraperUrl = c.env.SCRAPER_URL
+    if (!scraperUrl) return c.json({ success: false, error: 'SCRAPER_URL not configured' }, 503)
+    try {
+        const res = await fetch(`${scraperUrl}/scrape`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        })
+        const data = await res.json()
+        await audit(c.env.DB, { userId: c.get('user').id, action: 'admin_trigger_scrape', ip: getIp(c), severity: 'medium' })
+        return c.json({ success: true, result: data })
+    } catch (e) {
+        return c.json({ success: false, error: e.message }, 502)
+    }
+}))
+
+app.post('/admin/research', (c) => requireAdmin(c, async () => {
+    const { DB, OPENAI_API_KEY, BRAVE_API_KEY } = c.env
+    const { question } = await c.req.json()
+    if (!question?.trim()) return c.json({ success: false, error: 'question is required' }, 400)
+    if (!BRAVE_API_KEY) return c.json({ success: false, error: 'BRAVE_API_KEY not configured' }, 503)
+    if (!OPENAI_API_KEY) return c.json({ success: false, error: 'OPENAI_API_KEY not configured' }, 503)
+
+    const result = await researchQuestion(question, DB, OPENAI_API_KEY, BRAVE_API_KEY)
+    await audit(DB, { userId: c.get('user').id, action: 'admin_trigger_research', ip: getIp(c), metadata: { question, rowsFound: result?.rows?.length ?? 0 }, severity: 'medium' })
+    if (!result) return c.json({ success: false, message: 'No data found.' })
+    return c.json({ success: true, domain: result.domain, rowsFound: result.rows.length, data: result.rows })
+}))
+
+// ── Default admin seed (idempotent, reads from env vars) ─────
+app.post('/admin/seed', async (c) => {
+    const { DB, ADMIN_EMAIL, ADMIN_PASSWORD } = c.env
+    if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
+        return c.json({ success: false, error: 'ADMIN_EMAIL and ADMIN_PASSWORD must be set as secrets' }, 503)
+    }
+    try {
+        const existing = await DB.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").first()
+        if (existing) return c.json({ success: true, message: 'Admin already exists, skipped.' })
+
+        const hash = await hashPassword(ADMIN_PASSWORD)
+        const user = await DB.prepare(
+            "INSERT INTO users (email, full_name, password_hash, role, is_active) VALUES (?,?,?,'admin',1) RETURNING id, email, role"
+        ).bind(ADMIN_EMAIL.toLowerCase(), 'Admin', hash).first()
+        return c.json({ success: true, message: 'Admin user created.', user: { id: user.id, email: user.email, role: user.role } }, 201)
+    } catch (e) {
+        if (e.message?.includes('UNIQUE')) return c.json({ success: true, message: 'Admin already exists (email conflict), skipped.' })
+        return c.json({ success: false, error: e.message }, 500)
+    }
+})
+
+// ── Threat Intel (kept from original) ───────────────────────
+app.get('/security/intel/domain/:domain', (c) => requireAuth(c, async () => {
+    const domain = c.req.param('domain').toLowerCase()
+    if (!c.env.VIRUSTOTAL_API_KEY) return c.json({ success: false, error: 'VirusTotal API key not configured' }, 503)
+    const cacheKey = await sha256Hex('vt:' + domain)
+    const cached = await c.env.DB.prepare(
+        "SELECT result, queried_at FROM threat_cache WHERE type='virustotal' AND query_key=?"
+    ).bind(cacheKey).first()
+    if (cached && Date.now() - new Date(cached.queried_at).getTime() < 3_600_000)
+        return c.json({ success: true, cached: true, data: JSON.parse(cached.result) })
+
+    const vt = await fetch(`https://www.virustotal.com/api/v3/domains/${encodeURIComponent(domain)}`, {
+        headers: { 'x-apikey': c.env.VIRUSTOTAL_API_KEY }
+    })
+    if (!vt.ok) return c.json({ success: false, error: `VirusTotal returned ${vt.status}` }, 502)
+    const vtData = await vt.json()
+    const attrs = vtData.data?.attributes ?? {}
+    const stats = attrs.last_analysis_stats ?? {}
+    const result = {
+        domain, malicious: stats.malicious ?? 0, suspicious: stats.suspicious ?? 0,
+        harmless: stats.harmless ?? 0, undetected: stats.undetected ?? 0,
+        reputation: attrs.reputation ?? 0, categories: attrs.categories ?? {},
+        risk_score: Math.min(100, ((stats.malicious ?? 0) * 5 + (stats.suspicious ?? 0) * 2)),
+        scanned_at: new Date().toISOString()
+    }
+    await c.env.DB.prepare(
+        "INSERT INTO threat_cache (type, query_key, result) VALUES (?,?,?) ON CONFLICT(type,query_key) DO UPDATE SET result=excluded.result, queried_at=CURRENT_TIMESTAMP"
+    ).bind('virustotal', cacheKey, JSON.stringify(result)).run()
+    await audit(c.env.DB, { userId: c.get('user').id, action: 'domain_check', ip: getIp(c), metadata: { domain } })
+    return c.json({ success: true, cached: false, data: result })
+}))
+
+app.get('/security/intel/breach/:email', (c) => requireAuth(c, async () => {
+    const email = c.req.param('email').toLowerCase()
+    if (!c.env.HIBP_API_KEY) return c.json({ success: false, error: 'HIBP API key not configured' }, 503)
+    const cacheKey = await sha256Hex('hibp:' + email)
+    const cached = await c.env.DB.prepare(
+        "SELECT result, queried_at FROM threat_cache WHERE type='hibp' AND query_key=?"
+    ).bind(cacheKey).first()
+    if (cached && Date.now() - new Date(cached.queried_at).getTime() < 86_400_000)
+        return c.json({ success: true, cached: true, data: JSON.parse(cached.result) })
+
+    const hibp = await fetch(
+        `https://haveibeenpwned.com/api/v3/breachedaccount/${encodeURIComponent(email)}?truncateResponse=false`,
+        { headers: { 'hibp-api-key': c.env.HIBP_API_KEY, 'User-Agent': 'ArmenianOSINT/1.0' } }
+    )
+    let result
+    if (hibp.status === 404) {
+        result = { email, breach_count: 0, breaches: [] }
+    } else if (!hibp.ok) {
+        return c.json({ success: false, error: `HIBP returned ${hibp.status}` }, 502)
+    } else {
+        const data = await hibp.json()
+        result = { email, breach_count: data.length, breaches: data.map(b => ({ name: b.Name, domain: b.Domain, date: b.BreachDate, classes: b.DataClasses, verified: b.IsVerified })) }
+    }
+    await c.env.DB.prepare(
+        "INSERT INTO threat_cache (type, query_key, result) VALUES (?,?,?) ON CONFLICT(type,query_key) DO UPDATE SET result=excluded.result, queried_at=CURRENT_TIMESTAMP"
+    ).bind('hibp', cacheKey, JSON.stringify(result)).run()
+    await audit(c.env.DB, { userId: c.get('user').id, action: 'breach_check', ip: getIp(c) })
+    return c.json({ success: true, cached: false, data: result })
+}))
+
+// ── First-run setup (no users in DB yet) ────────────────────
 app.post('/auth/setup', async (c) => {
     const DB = c.env.DB
     try {
         const row = await DB.prepare('SELECT COUNT(*) AS n FROM users').first()
         if ((row?.n ?? 1) > 0) return c.json({ success: false, error: 'Setup already completed' }, 403)
-
         const { email, password, full_name } = await c.req.json()
         if (!email || !password || password.length < 8) return c.json({ success: false, error: 'Email and password (min 8 chars) required' }, 400)
-
         const hash   = await hashPassword(password)
         const result = await DB.prepare(
             'INSERT INTO users (email, full_name, password_hash, role) VALUES (?,?,?,?) RETURNING *'
         ).bind(email.toLowerCase(), full_name || 'Admin', hash, 'admin').first()
-
         const token = await signJWT({ id: result.id, email: result.email, role: result.role }, getSecret(c.env))
-        return c.json({ success: true, message: 'Admin account created', token, user: { id: result.id, email: result.email, role: result.role, full_name: result.full_name } }, 201)
+        return c.json({ success: true, message: 'Admin account created', token, user: { id: result.id, email: result.email, role: result.role } }, 201)
     } catch (err) {
         return c.json({ success: false, error: err.message }, 500)
     }

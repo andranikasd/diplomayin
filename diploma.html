@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="hy">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Դիպլոմային Աշխատանք</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 14pt;
+  line-height: 1.9;
+  color: #111;
+  background: #ccc;
+}
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 14px auto;
+  padding: 25mm 22mm 22mm 30mm;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+@media print {
+  body { background:#fff; }
+  .page { margin:0; box-shadow:none; page-break-after:always; }
+}
+h1 { font-size:15pt; font-weight:bold; text-transform:uppercase; text-align:center;
+     margin:24px 0 16px; letter-spacing:.3px; }
+h2 { font-size:14pt; font-weight:bold; margin:22px 0 12px; }
+h3 { font-size:13pt; font-weight:bold; margin:18px 0 10px; }
+p  { text-indent:1.25cm; margin-bottom:9px; text-align:justify; }
+p.ni { text-indent:0; }
+p.c  { text-indent:0; text-align:center; }
+ul, ol { margin:8px 0 8px 1.5cm; }
+li { margin-bottom:5px; text-align:justify; }
+table.d { width:100%; border-collapse:collapse; margin:14px 0; font-size:12pt; }
+table.d th, table.d td { border:1px solid #555; padding:6px 9px; vertical-align:top; }
+table.d th { background:#e0e0e0; text-align:center; font-weight:bold; }
+table.d td.c { text-align:center; }
+.code { font-family:'Courier New',Courier,monospace; font-size:10pt; background:#f5f5f5;
+        border:1px solid #ccc; border-radius:3px; display:block; padding:10px 14px;
+        margin:12px 0; white-space:pre-wrap; line-height:1.55; }
+code { font-family:'Courier New',Courier,monospace; font-size:10.5pt; background:#f0f0f0;
+       border:1px solid #ddd; border-radius:2px; padding:1px 5px; }
+hr { border:none; border-top:1px solid #bbb; margin:22px 0; }
+.pb { page-break-after:always; }
+.toc td { border:none; padding:3px 4px; font-size:13pt; }
+.toc .h0 { font-weight:bold; padding-top:10px; }
+.toc .h1 { padding-left:22px; }
+.toc .pg { text-align:right; white-space:nowrap; width:36px; }
+.cover { display:flex; flex-direction:column; align-items:center;
+         justify-content:space-between; min-height:247mm; text-align:center; }
+.cover p { text-indent:0; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     ԿՈՂՔԻՆ  (COVER PAGE)
+══════════════════════════════════════════════════════ -->
+<div class="page pb">
+<div class="cover">
+
+  <div>
+    <p style="font-size:11.5pt;font-weight:bold;text-transform:uppercase;line-height:1.5;">
+      ՀԱՅԱՍՏԱՆԻ ՀԱՆՐԱՊETՈՒԹՅAN ԿRTUTYUN,<br>
+      GIТUТYAN, MШAKUYTИ ЕВ SPORTI NAХARARUТYAN
+    </p>
+    <p style="font-size:12.5pt;font-weight:bold;text-transform:uppercase;margin-top:8px;">
+      Հայastani Petakan Polytexnikakan Hamalsaran
+    </p>
+    <p style="font-size:11.5pt;margin-top:6px;">
+      Ֆakultét՝ Informatika ev Kiraakan Matematika
+    </p>
+    <p style="font-size:11.5pt;">
+      Ambion՝ Tsragrayín Chartaragitutyun ev Tegekatvakan Hamakargeri
+    </p>
+  </div>
+
+  <div>
+    <p style="font-size:13pt;font-weight:bold;text-transform:uppercase;
+              letter-spacing:1px;margin-bottom:16px;">
+      ԴИПЛОМАЙІН АШХАТАНQ
+    </p>
+    <p style="font-size:17pt;font-weight:bold;line-height:1.4;">
+      Հайastani Biznes Шukáyi OSINT Tvyalneri<br>
+      Intelektyual Verluytsutyan Chat-Bot Hartak
+    </p>
+    <p style="font-size:13pt;margin-top:10px;color:#333;font-style:italic;">
+      Intelligent Chatbot Platform for Armenian Business OSINT Data Analytics
+    </p>
+  </div>
+
+  <div style="text-align:left;width:100%;font-size:12.5pt;line-height:2.2;">
+    <table style="border:none;width:100%;">
+      <tr>
+        <td style="border:none;width:240px;">Katarec'՝</td>
+        <td style="border:none;font-weight:bold;">Grigoryan Andranik</td>
+      </tr>
+      <tr>
+        <td style="border:none;">Ughutyun՝</td>
+        <td style="border:none;">Tsragrayín Chartaragitutyun, 09.03.01</td>
+      </tr>
+      <tr>
+        <td style="border:none;">Kurs / Khumb՝</td>
+        <td style="border:none;">4-rd kurs</td>
+      </tr>
+      <tr><td style="border:none;" colspan="2">&nbsp;</td></tr>
+      <tr>
+        <td style="border:none;">Git. ghekaavar՝</td>
+        <td style="border:none;">___________________________</td>
+      </tr>
+      <tr>
+        <td style="border:none;">Ambioni varich՝</td>
+        <td style="border:none;">___________________________</td>
+      </tr>
+      <tr>
+        <td style="border:none;">Pashtpanutyun՝</td>
+        <td style="border:none;">«___» _______________ 2025 t.</td>
+      </tr>
+      <tr>
+        <td style="border:none;">Gnahatakan՝</td>
+        <td style="border:none;">__________</td>
+      </tr>
+    </table>
+    <p class="c" style="font-weight:bold;margin-top:22px;font-size:13pt;">
+      Երevann, 2025
+    </p>
+  </div>
+
+</div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     ԱՄփоփum  (ABSTRACT)
+══════════════════════════════════════════════════════ -->
+<div class="page pb">
+<h1>Ամufoum (Annotation)</h1>
+
+<h2>Հайerén</h2>
+
+<p>
+Соyn diplomayín ashtaranqn nvirvaTs é Hayastani biznes shukáyi OSINT (Bats Agbyuri
+Hetakhuzutyun) tvyalneri avtomat havakman, karavárman ev intelektyual verluytsutyan
+integrvaTs hamakargí nakhagtsmanN u nerdrmanN: SteghtsvaTs hartakÝ hnaravorutyan é
+targelin ogtatarerín bnakan lezvovm hartsumner ughhel amboghjakan biznes-tvyalneri
+bazayin, stanal vijhakagrákan amfofumner, diagrámner ev verlutsoghákan hashvetvutyunner
+haykaKan YNkeruytyunneri, finansakán tsutsaníshnerí, olortáyin mitumneri ev
+noruytyunneri veraberyal:
+</p>
+
+<p>
+NerdrvaTs lutsumÝ ogtagortsNum é Node.js / Express.js hetnamasi, PostgreSQL tvyalneri bazayi,
+OpenAI GPT-4 ev Anthropic Claude modelnerí integratsia bnakan lezvi SQL-ardzhmunqneri
+hamar, inchpes nayev Cloudflare Workers texnologian artadrank mijavayri maturtsman hamar:
+Hamakargume nerartsum é avtomat kayt-qerich (web scraper), Redis-hert, WebSocket irakán
+zhamanakin hakhoraktsutyan, JWT vaveryakanatstmann ev RBAC anvatangutyyan chartaragitutyun:
+</p>
+
+<p>
+<strong>Himnabarrer'</strong> OSINT, biznes-hetakhuzutyun, NLP-to-SQL, LLM, Node.js,
+PostgreSQL, Cloudflare Workers, chatbot, haykakan YNkeruytyunner, tvyalneri verluytsutyan:
+</p>
+
+<hr/>
+
+<h2>English Summary</h2>
+
+<p>
+This bachelor's thesis presents the design and full-stack implementation of an intelligent
+chatbot platform for automated collection, storage, and AI-driven analysis of OSINT
+(Open-Source Intelligence) data about the Armenian business market. The system enables
+users to query a rich PostgreSQL database using natural language in Armenian or English,
+receiving statistical summaries, interactive charts, and analytical reports about Armenian
+companies, financial indicators, sector trends, and news articles.
+</p>
+
+<p>
+The solution is built on a Node.js / Express.js backend with OpenAI GPT-4 and Anthropic
+Claude integrations for natural-language-to-SQL conversion, and uses Cloudflare Workers
+with D1 for serverless production deployment. Key components include a Redis-backed
+automated web scraper, Socket.io real-time communication, JWT authentication, and a
+layered RBAC security architecture with full audit logging.
+</p>
+
+<p>
+<strong>Keywords:</strong> OSINT, business intelligence, NLP-to-SQL, LLM, Node.js,
+PostgreSQL, Cloudflare Workers, chatbot, Armenian companies, data analytics, RBAC.
+</p>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     BOVANDAKUTYUN  (TABLE OF CONTENTS)
+══════════════════════════════════════════════════════ -->
+<div class="page pb">
+<h1>Bovandakutyun</h1>
+
+<table class="toc" style="width:100%;">
+  <tr><td class="h0">Ամufoum (Annotation)</td><td class="pg">3</td></tr>
+  <tr><td class="h0">Neratsututyun</td><td class="pg">6</td></tr>
+
+  <tr><td class="h0">Glukh 1. Khndri Verluytsutyan ev Texnikakan Pahanjner</td><td class="pg">9</td></tr>
+  <tr><td class="h1">1.1 Haykakan biznes-hetakhuzutyan zhamamakakan vijhake</td><td class="pg">9</td></tr>
+  <tr><td class="h1">1.2 Khndri dzevakerpum ev nakhagtskan npatak</td><td class="pg">11</td></tr>
+  <tr><td class="h1">1.3 Goyutyun unetsogh lutsumneri hamamatakan verluytsutyan</td><td class="pg">13</td></tr>
+  <tr><td class="h1">1.4 Funktsional ev okh-funktsional pahanjner</td><td class="pg">15</td></tr>
+
+  <tr><td class="h0">Glukh 2. Hamakargí Chartarapetutyun ev Nakhagtsumm</td><td class="pg">18</td></tr>
+  <tr><td class="h1">2.1 Yndhanuraktsi chartarapetutyuní nakhagtsumm</td><td class="pg">18</td></tr>
+  <tr><td class="h1">2.2 Tvyalneri bazayi katstruvatsk ev skhema</td><td class="pg">21</td></tr>
+  <tr><td class="h1">2.3 Bnakan lezun SQL-i veratsel modul (NLP-to-SQL)</td><td class="pg">25</td></tr>
+  <tr><td class="h1">2.4 Bazmamatakrar LLM integratsía</td><td class="pg">27</td></tr>
+  <tr><td class="h1">2.5 Avtomát kayt-qerich ev Redis-hert</td><td class="pg">29</td></tr>
+
+  <tr><td class="h0">Glukh 3. Irakanatstum ev Tsragrayín Tsadkagri Nkaragrutyun</td><td class="pg">32</td></tr>
+  <tr><td class="h1">3.1 Hetnamas — Express.js server ev API maruter</td><td class="pg">32</td></tr>
+  <tr><td class="h1">3.2 Query Orchestrator — khkhí katrasman zharangakan tsarayutyun</td><td class="pg">36</td></tr>
+  <tr><td class="h1">3.3 Chatamart — SaaS UI, Chart.js ev WebSocket</td><td class="pg">39</td></tr>
+  <tr><td class="h1">3.4 Cloudflare Workers ev D1 SQLite integratsía</td><td class="pg">42</td></tr>
+
+  <tr><td class="h0">Glukh 4. Anvtangutyun ev RBAC Chartarapetutyun</td><td class="pg">45</td></tr>
+  <tr><td class="h1">4.1 JWT vaveryakanatstum ev nisti karavárumm</td><td class="pg">45</td></tr>
+  <tr><td class="h1">4.2 SQL nerarkman kankharargelum</td><td class="pg">47</td></tr>
+  <tr><td class="h1">4.3 Audit log, rate limiting ev IP kanoner</td><td class="pg">49</td></tr>
+  <tr><td class="h1">4.4 TOTP erkfaktor nyuynakanatstum</td><td class="pg">51</td></tr>
+
+  <tr><td class="h0">Glukh 5. Phenotsadritutyun, CI/CD ev Docker</td><td class="pg">53</td></tr>
+  <tr><td class="h1">5.1 Docker Compose — teghákan mshakman mijavayer</td><td class="pg">53</td></tr>
+  <tr><td class="h1">5.2 GitHub Actions CI/CD konfiguratsiya</td><td class="pg">55</td></tr>
+  <tr><td class="h1">5.3 Cloudflare Pages + Workers — artadrank tsarayutyun</td><td class="pg">57</td></tr>
+
+  <tr><td class="h0">Glukh 6. Parktarum ev Ardyunqneri Gnahatutyun</td><td class="pg">59</td></tr>
+  <tr><td class="h1">6.1 Funktsional parktarum</td><td class="pg">59</td></tr>
+  <tr><td class="h1">6.2 Kataróghakanutyan ev bernvatsutyan parktarum</td><td class="pg">61</td></tr>
+  <tr><td class="h1">6.3 Anvtangutyyan parktarum</td><td class="pg">63</td></tr>
+  <tr><td class="h1">6.4 Hamamatakan gnahatutyun</td><td class="pg">64</td></tr>
+
+  <tr><td class="h0">Ezrakac</td><td class="pg">66</td></tr>
+  <tr><td class="h0">Grakhosutyan Tsank</td><td class="pg">68</td></tr>
+</table>
+</div>
+
+</body>
+</html>

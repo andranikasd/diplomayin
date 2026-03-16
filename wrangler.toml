@@ -3,14 +3,19 @@ compatibility_date = "2024-12-18"
 pages_build_output_dir = "public"
 
 [vars]
-ENABLE_AI_SQL = "false"
+ENABLE_AI_SQL = "true"
 
-# Set these as secrets via:
-# wrangler pages secret put JWT_SECRET
-# wrangler pages secret put OPENAI_API_KEY
-# wrangler pages secret put VIRUSTOTAL_API_KEY
-# wrangler pages secret put HIBP_API_KEY
+# Secrets — set via wrangler pages secret put <NAME> --project-name=armdata
+# JWT_SECRET
+# OPENAI_API_KEY
+# BRAVE_API_KEY
+# ADMIN_EMAIL
+# ADMIN_PASSWORD
+# VIRUSTOTAL_API_KEY
+# HIBP_API_KEY
+# SCRAPER_URL  (e.g. https://armdata-scraper.workers.dev)
 
+# Public data DB — all user-queryable data
 [[d1_databases]]
 binding = "DB"
 database_name = "armdata-db"
